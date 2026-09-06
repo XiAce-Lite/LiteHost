@@ -1287,7 +1287,7 @@ bool MainComponent::saveProjectFile (const juce::File& file)
 void MainComponent::newProject()
 {
     clearProjectState();
-    appSettings.currentProject = {};
+    appSettings.currentProject = juce::File();
     ensureDefaultTrack();
     rebuildStrips();
     saveAppSettings();
