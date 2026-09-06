@@ -145,6 +145,13 @@ bool SyncRoomFinder::findDescription (const juce::KnownPluginList& known,
         considerFile (*format,
                       juce::File ("C:\\Program Files\\Cakewalk\\VstPlugins\\syncroom_vst_bridge2.vst3"),
                       bridge, haveBridge, fallback, haveFallback);
+       #elif JUCE_MAC
+        considerFile (*format,
+                      juce::File ("/Library/Audio/Plug-Ins/VST3/syncroom_vst_bridge2.vst3"),
+                      bridge, haveBridge, fallback, haveFallback);
+        considerFile (*format,
+                      juce::File ("/Library/Audio/Plug-Ins/VST3/SYNCROOM.vst3"),
+                      bridge, haveBridge, fallback, haveFallback);
        #endif
     }
 

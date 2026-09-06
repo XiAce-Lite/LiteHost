@@ -100,19 +100,28 @@ target_compile_definitions(LiteHost PRIVATE
     JUCE_USE_CURL=0
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_VST=0
-    JUCE_WASAPI=1
-    JUCE_WASAPI_EXCLUSIVE=1
-    JUCE_DIRECTSOUND=0
-    JUCE_ASIO=1
-    JUCE_ASIO_USE_EXTERNAL_SDK=0
     JUCE_REPORT_APP_USAGE=0
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_VST3_HOST_CROSS_PLATFORM_UID=1
     JUCE_STRICT_REFCOUNTEDPOINTER=1
 )
 
+if(WIN32)
+    target_compile_definitions(LiteHost PRIVATE
+        JUCE_WASAPI=1
+        JUCE_WASAPI_EXCLUSIVE=1
+        JUCE_DIRECTSOUND=0
+        JUCE_ASIO=1
+        JUCE_ASIO_USE_EXTERNAL_SDK=0
+    )
+endif()
+
 if(APPLE)
-    target_compile_definitions(LiteHost PRIVATE JUCE_PLUGINHOST_AU=0)
+    # Same product as Windows: VST3 only. AU can be enabled later without a fork.
+    target_compile_definitions(LiteHost PRIVATE
+        JUCE_PLUGINHOST_AU=0
+        JUCE_COREAUDIO=1
+    )
 endif()
 
 if(MSVC)

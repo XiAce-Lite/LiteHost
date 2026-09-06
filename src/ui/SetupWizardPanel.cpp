@@ -1,6 +1,7 @@
 #include "SetupWizardPanel.h"
 #include "LookAndFeel.h"
 #include "Utf8.h"
+#include "app/PluginScanCoordinator.h"
 
 SetupWizardPanel::SetupWizardPanel (juce::AudioDeviceManager& devices,
                                     juce::StringArray defaultsIn,
@@ -174,14 +175,22 @@ void SetupWizardPanel::goTo (int newPage)
             break;
         case 1:
             stepTitle.setText (jp (u8"オーディオと MIDI"), juce::dontSendNotification);
-            stepBody.setText (jp (u8"Windows では ASIO ドライバとバッファ 128 前後がおすすめです。\n"
-                                  u8"途切れるときはバッファを 256 などに上げてください。演奏用 MIDI 入力もここで有効にできます。"),
+            stepBody.setText (
+               #if JUCE_WINDOWS
+                jp (u8"Windows では ASIO ドライバとバッファ 128 前後がおすすめです。\n")
+               #elif JUCE_MAC
+                jp (u8"Mac では Core Audio とバッファ 128 前後がおすすめです。\n")
+               #else
+                jp (u8"バッファ 128 前後がおすすめです。\n")
+               #endif
+                + jp (u8"途切れるときはバッファを 256 などに上げてください。演奏用 MIDI 入力もここで有効にできます。"),
                               juce::dontSendNotification);
             break;
         case 2:
             stepTitle.setText (jp (u8"VST3 フォルダ"), juce::dontSendNotification);
-            stepBody.setText (jp (u8"標準は Common Files\\VST3 のみです。必要なフォルダを追加してからスキャンしてください。\n"
-                                  u8"「次へ」だけ進むとスキャンはしません（あとからヘッダーの VST3 スキャンでも可）。"),
+            stepBody.setText (PluginScanCoordinator::defaultFolderHint()
+                                  + "\n"
+                                  + jp (u8"必要なフォルダを追加してからスキャンしてください。「次へ」だけ進むとスキャンはしません（あとからヘッダーの VST3 スキャンでも可）。"),
                               juce::dontSendNotification);
             break;
         case 3:

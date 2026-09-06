@@ -10,4 +10,5 @@ namespace PluginScanCoordinator
     juce::FileSearchPath defaultPaths (const juce::AudioPluginFormatManager& formats);
     juce::FileSearchPath buildPaths (const juce::AudioPluginFormatManager& formats,
                                      const juce::StringArray& extraFolders);
+    juce::String defaultFolderHint();
 }

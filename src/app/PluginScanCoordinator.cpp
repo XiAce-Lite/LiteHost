@@ -1,4 +1,5 @@
 #include "PluginScanCoordinator.h"
+#include "Utf8.h"
 
 juce::AudioPluginFormat* PluginScanCoordinator::findVst3Format (const juce::AudioPluginFormatManager& formats)
 {
@@ -18,6 +19,9 @@ juce::FileSearchPath PluginScanCoordinator::defaultPaths (const juce::AudioPlugi
     paths.addIfNotAlreadyThere (juce::File::getSpecialLocation (juce::File::windowsProgramFilesCommon)
                                     .getChildFile ("VST3"));
     paths.addIfNotAlreadyThere (juce::File ("C:\\Program Files (x86)\\Common Files\\VST3"));
+   #elif JUCE_MAC
+    juce::ignoreUnused (formats);
+    paths.addIfNotAlreadyThere (juce::File ("/Library/Audio/Plug-Ins/VST3"));
    #else
     if (auto* format = findVst3Format (formats))
     {
@@ -42,4 +46,15 @@ juce::FileSearchPath PluginScanCoordinator::buildPaths (const juce::AudioPluginF
     for (const auto& extra : extraFolders)
         paths.addIfNotAlreadyThere (juce::File (extra));
     return paths;
+}
+
+juce::String PluginScanCoordinator::defaultFolderHint()
+{
+   #if JUCE_WINDOWS
+    return jp (u8"標準は Common Files\\VST3 のみ。ユーザーフォルダは追加してください。");
+   #elif JUCE_MAC
+    return jp (u8"標準は /Library/Audio/Plug-Ins/VST3 のみ。ユーザー領域（~/Library/...）は追加してください。");
+   #else
+    return jp (u8"標準はシステムの VST3 フォルダのみ。ユーザー領域は追加してください。");
+   #endif
 }

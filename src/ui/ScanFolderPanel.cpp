@@ -1,6 +1,7 @@
 #include "ScanFolderPanel.h"
 #include "LookAndFeel.h"
 #include "Utf8.h"
+#include "app/PluginScanCoordinator.h"
 
 ScanFolderPanel::ScanFolderPanel (juce::StringArray defaultsIn, juce::StringArray extrasIn)
     : list (std::move (defaultsIn), std::move (extrasIn))
@@ -9,7 +10,7 @@ ScanFolderPanel::ScanFolderPanel (juce::StringArray defaultsIn, juce::StringArra
     title.setFont (LiteLookAndFeel::uiFont (16.0f, juce::Font::bold));
     addAndMakeVisible (title);
 
-    hint.setText (jp (u8"標準は Common Files\\VST3 のみ。ユーザーフォルダは追加してください。"), juce::dontSendNotification);
+    hint.setText (PluginScanCoordinator::defaultFolderHint(), juce::dontSendNotification);
     hint.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
     addAndMakeVisible (hint);
 

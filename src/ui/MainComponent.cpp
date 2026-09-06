@@ -356,16 +356,23 @@ void MainComponent::scanFinished()
 
 void MainComponent::applyFirstRunAudioDefaults()
 {
-   #if JUCE_WINDOWS
     const auto& types = deviceManager.getAvailableDeviceTypes();
-    bool hasAsio = false;
-    for (auto* type : types)
-        if (type != nullptr && type->getTypeName() == "ASIO")
-            hasAsio = true;
+    const juce::String preferred =
+       #if JUCE_WINDOWS
+        "ASIO";
+       #elif JUCE_MAC
+        "CoreAudio";
+       #else
+        {};
+       #endif
 
-    if (hasAsio)
-        deviceManager.setCurrentAudioDeviceType ("ASIO", true);
-   #endif
+    if (preferred.isNotEmpty())
+        for (auto* type : types)
+            if (type != nullptr && type->getTypeName().containsIgnoreCase (preferred))
+            {
+                deviceManager.setCurrentAudioDeviceType (type->getTypeName(), true);
+                break;
+            }
 
     auto setup = deviceManager.getAudioDeviceSetup();
     if (auto* device = deviceManager.getCurrentAudioDevice())
@@ -463,6 +470,9 @@ bool MainComponent::maybeAutoCreateStarterMonoTrack()
 
    #if JUCE_WINDOWS
     if (deviceManager.getCurrentAudioDeviceType() != "ASIO")
+        return false;
+   #elif JUCE_MAC
+    if (! deviceManager.getCurrentAudioDeviceType().containsIgnoreCase ("CoreAudio"))
         return false;
    #else
     return false;
