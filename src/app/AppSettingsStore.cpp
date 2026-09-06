@@ -10,7 +10,7 @@ void AppSettingsStore::load (AudioEngine& engine,
 {
     recentProjects.clear();
     extraVstPaths.clear();
-    currentProject = {};
+    currentProject = juce::File();
     windowState.clear();
     skippedReleaseTag.clear();
     setupWizardCompleted = false;
