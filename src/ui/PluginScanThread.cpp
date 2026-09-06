@@ -1,6 +1,7 @@
 #include "PluginScanThread.h"
 #include "MainComponent.h"
 #include "Utf8.h"
+#include "app/AppPaths.h"
 
 PluginScanThread::PluginScanThread (MainComponent& ownerIn,
                                     juce::KnownPluginList& list,
@@ -16,7 +17,7 @@ PluginScanThread::PluginScanThread (MainComponent& ownerIn,
 
 void PluginScanThread::run()
 {
-    const auto deadMansPedal = owner.getAppDir().getChildFile ("deadMansPedal");
+    const auto deadMansPedal = AppPaths::deadMansPedalFile();
     juce::PluginDirectoryScanner scanner (list, format, paths, true, deadMansPedal, true);
     juce::String name;
 

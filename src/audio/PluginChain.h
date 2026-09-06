@@ -36,7 +36,34 @@ public:
     juce::AudioPluginInstance* get (int index) const noexcept;
     juce::PluginDescription descriptionAt (int index) const;
 
+    struct PluginLoadRequest
+    {
+        juce::PluginDescription description;
+        juce::MemoryBlock state;
+        bool hasState = false;
+        bool bypass = false;
+    };
+
+    struct PluginLoadResult
+    {
+        juce::AudioPluginInstance* plugin = nullptr;
+        bool needsDelayedArm = false;
+        juce::String error;
+    };
+
     void writeXml (juce::XmlElement& parent) const;
+    static std::vector<PluginLoadRequest> parseXml (const juce::XmlElement& parent);
+    static int countXmlPlugins (const juce::XmlElement& parent);
+
+    /** Instantiate, restore state, prepare, and add. Does not open/close audio or arm SyncRoom. */
+    PluginLoadResult loadPlugin (const PluginLoadRequest& request,
+                                 juce::AudioPluginFormatManager& formats,
+                                 double sampleRate,
+                                 int blockSize,
+                                 juce::AudioPlayHead* playHead,
+                                 bool suspendBeforePrepare,
+                                 const juce::CriticalSection* addLock = nullptr);
+
     static std::unique_ptr<juce::AudioPluginInstance> instantiate (
         const juce::PluginDescription& description,
         juce::AudioPluginFormatManager& formats,

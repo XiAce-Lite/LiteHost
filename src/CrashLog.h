@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/AppPaths.h"
 #include <JuceHeader.h>
 
 #if JUCE_WINDOWS
@@ -10,10 +11,7 @@ namespace CrashLog
 {
     inline juce::File logFile()
     {
-        auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                       .getChildFile ("LiteHost");
-        dir.createDirectory();
-        return dir.getChildFile ("plugin_load.log");
+        return AppPaths::pluginLoadLogFile();
     }
 
     inline void write (const juce::String& line)

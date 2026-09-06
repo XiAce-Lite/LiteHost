@@ -1,4 +1,5 @@
 #include "PluginChain.h"
+#include "SyncRoomFinder.h"
 
 bool PluginChain::prepareInstance (juce::AudioPluginInstance& plugin,
                                    double newSampleRate,
@@ -129,7 +130,7 @@ void PluginChain::refreshSlotChannels (Slot& slot) noexcept
 
 bool PluginChain::shouldKeepPrepared (const juce::AudioPluginInstance& plugin) noexcept
 {
-    return plugin.getName().containsIgnoreCase ("syncroom");
+    return SyncRoomFinder::shouldKeepPrepared (plugin);
 }
 
 void PluginChain::processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& incomingMidi) noexcept
@@ -298,12 +299,121 @@ void PluginChain::writeXml (juce::XmlElement& parent) const
         if (xml == nullptr)
             continue;
 
+        xml->setTagName ("PLUGIN");
         juce::MemoryBlock state;
         slot.plugin->getStateInformation (state);
         xml->setAttribute ("state", state.toBase64Encoding());
         xml->setAttribute ("bypass", slot.bypassed ? 1 : 0);
         parent.addChildElement (xml.release());
     }
+}
+
+int PluginChain::countXmlPlugins (const juce::XmlElement& parent)
+{
+    int n = 0;
+    for (auto* child = parent.getFirstChildElement(); child != nullptr; child = child->getNextElement())
+        if (child->getTagName() == "PLUGIN")
+            ++n;
+    return n;
+}
+
+std::vector<PluginChain::PluginLoadRequest> PluginChain::parseXml (const juce::XmlElement& parent)
+{
+    std::vector<PluginLoadRequest> requests;
+
+    for (auto* child = parent.getFirstChildElement(); child != nullptr; child = child->getNextElement())
+    {
+        if (child->getTagName() != "PLUGIN")
+            continue;
+
+        PluginLoadRequest request;
+        if (! request.description.loadFromXml (*child))
+            continue;
+
+        if (child->hasAttribute ("state"))
+        {
+            request.state.fromBase64Encoding (child->getStringAttribute ("state"));
+            request.hasState = true;
+        }
+
+        request.bypass = child->getBoolAttribute ("bypass", false);
+        requests.push_back (std::move (request));
+    }
+
+    return requests;
+}
+
+PluginChain::PluginLoadResult PluginChain::loadPlugin (const PluginLoadRequest& request,
+                                                       juce::AudioPluginFormatManager& formats,
+                                                       double sampleRate,
+                                                       int blockSize,
+                                                       juce::AudioPlayHead* playHeadToUse,
+                                                       bool suspendBeforePrepare,
+                                                       const juce::CriticalSection* addLock)
+{
+    PluginLoadResult result;
+    result.needsDelayedArm = SyncRoomFinder::needsDelayedArm (request.description);
+
+    if (! canAdd())
+    {
+        result.error = "chain full";
+        return result;
+    }
+
+    if (playHeadToUse != nullptr)
+        setPlayHead (playHeadToUse);
+
+    auto instance = instantiate (request.description, formats, sampleRate, blockSize, result.error);
+    if (instance == nullptr)
+        return result;
+
+    if (request.hasState && request.state.getSize() > 0)
+        instance->setStateInformation (request.state.getData(), (int) request.state.getSize());
+
+    // attach: suspend everything before prepare. project load: only SyncRoom after prepare.
+    if (suspendBeforePrepare)
+        instance->suspendProcessing (true);
+
+    if (! prepareInstance (*instance, sampleRate, blockSize, false, playHeadToUse))
+    {
+        result.error = "prepare failed";
+        return result;
+    }
+
+    if (! suspendBeforePrepare)
+        instance->suspendProcessing (result.needsDelayedArm);
+
+    auto commit = [this, &instance, &request, &result, suspendBeforePrepare]() -> juce::AudioPluginInstance* {
+        auto* added = addPrepared (std::move (instance));
+        if (added == nullptr)
+            return nullptr;
+
+        setBypassed (size() - 1, request.bypass);
+        if (suspendBeforePrepare && ! result.needsDelayedArm)
+            added->suspendProcessing (false);
+        return added;
+    };
+
+    juce::AudioPluginInstance* added = nullptr;
+    if (addLock != nullptr)
+    {
+        const juce::ScopedLock sl (*addLock);
+        added = commit();
+    }
+    else
+    {
+        added = commit();
+    }
+
+    if (added == nullptr)
+    {
+        result.error = "add failed";
+        return result;
+    }
+
+    result.plugin = added;
+    result.error.clear();
+    return result;
 }
 
 std::unique_ptr<juce::AudioPluginInstance> PluginChain::instantiate (

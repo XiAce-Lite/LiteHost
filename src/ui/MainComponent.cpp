@@ -8,6 +8,9 @@
 #include "SettingsDialogs.h"
 #include "UpdateChecker.h"
 #include "StartupSplash.h"
+#include "app/AppPaths.h"
+#include "app/PluginScanCoordinator.h"
+#include "app/ProjectStore.h"
 #include "audio/SyncRoomFinder.h"
 #include <cstdlib>
 #include <map>
@@ -15,14 +18,6 @@
 namespace
 {
     constexpr int preferredBufferSize = 128;
-
-    juce::File appDirectory()
-    {
-        auto dir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
-                       .getChildFile ("LiteHost");
-        dir.createDirectory();
-        return dir;
-    }
 
     int nearestBufferSize (const juce::Array<int>& sizes, int preferred)
     {
@@ -44,30 +39,13 @@ namespace
 
         return best;
     }
-
-    int countPluginElements (const juce::XmlElement& root)
-    {
-        int n = 0;
-        if (auto* master = root.getChildByName ("MASTER"))
-            for (auto* child = master->getFirstChildElement(); child != nullptr; child = child->getNextElement())
-                if (child->getTagName() == "PLUGIN")
-                    ++n;
-
-        if (auto* tracks = root.getChildByName ("TRACKS"))
-            for (auto* track = tracks->getFirstChildElement(); track != nullptr; track = track->getNextElement())
-                if (track->getTagName() == "TRACK")
-                    for (auto* child = track->getFirstChildElement(); child != nullptr; child = child->getNextElement())
-                        if (child->getTagName() == "PLUGIN")
-                            ++n;
-
-        return n;
-    }
 }
 
 MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* progress)
     : menuBar (this),
       startupProgress (progress),
-      startupProjectPath (std::move (projectPathToOpen))
+      startupProjectPath (std::move (projectPathToOpen)),
+      mixer (engine, *this)
 {
     setLookAndFeel (&lookAndFeel);
     setOpaque (true);
@@ -95,9 +73,9 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
     exclusiveSoloButton.setClickingTogglesState (true);
     exclusiveSoloButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LiteLookAndFeel::solo));
     exclusiveSoloButton.setTooltip (jp (u8"Exclusive Solo（Cakewalk）\nON: ソロは1本だけ。次に S を押したトラック以外は解除。\nShift+S の Override は残る。OFF にした瞬間は今のソロを変えない。"));
-    exclusiveSoloButton.setToggleState (engine.exclusiveSoloMode.load(), juce::dontSendNotification);
+    exclusiveSoloButton.setToggleState (mixer.getExclusiveSoloMode(), juce::dontSendNotification);
     exclusiveSoloButton.onClick = [this] {
-        engine.exclusiveSoloMode = exclusiveSoloButton.getToggleState();
+        mixer.setExclusiveSoloMode (exclusiveSoloButton.getToggleState());
         saveAppSettings();
         status.setText (makeStatusText(), juce::dontSendNotification);
     };
@@ -128,10 +106,10 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
     reportStartup (jp (u8"オーディオを開始しています..."), 0.24);
     setupAudio();
 
-    controlSurface.setListener (this);
+    controlSurface.setListener (&mixer);
     controlSurface.setDeviceManager (&deviceManager);
     controlSurface.applySettings();
-    midiLearn.setListener (this);
+    midiLearn.setListener (&mixer);
     midiLearn.setDeviceManager (&deviceManager);
     midiLearn.applySettings();
     updateEngineButton();
@@ -150,18 +128,18 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
                             juce::dontSendNotification);
     }
 
-    if (! opened && currentProject.existsAsFile())
-        opened = loadProjectFile (currentProject);
+    if (! opened && appSettings.currentProject.existsAsFile())
+        opened = loadProjectFile (appSettings.currentProject);
 
     if (! opened)
     {
-        const auto legacy = getAppDir().getChildFile ("session.xml");
+        const auto legacy = AppPaths::legacySessionFile();
         if (legacy.existsAsFile())
             opened = loadProjectFile (legacy);
     }
 
     // 初回ウィザード前は空のまま。ウィザード完了時に ASIO+入力があればモノラル1ch で自動作成する。
-    if (! opened && setupWizardCompleted)
+    if (! opened && appSettings.setupWizardCompleted)
         ensureDefaultTrack();
 
     CrashLog::write ("project opened=" + juce::String ((int) opened));
@@ -178,7 +156,7 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
             safe->startUpdateCheck();
     });
 
-    if (! setupWizardCompleted)
+    if (! appSettings.setupWizardCompleted)
     {
         juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
             if (safe != nullptr)
@@ -266,14 +244,14 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
     menu.addItem (menuNew, jp (u8"新規プロジェクト"));
     menu.addItem (menuOpen, jp (u8"開く..."));
     menu.addSeparator();
-    menu.addItem (menuSave, jp (u8"保存"), currentProject != juce::File());
+    menu.addItem (menuSave, jp (u8"保存"), appSettings.currentProject != juce::File());
     menu.addItem (menuSaveAs, jp (u8"名前を付けて保存..."));
     menu.addSeparator();
 
     juce::PopupMenu recent;
-    for (int i = 0; i < recentProjects.size(); ++i)
-        recent.addItem (menuRecentBase + i, recentProjects.getReference (i).getFullPathName());
-    if (recentProjects.isEmpty())
+    for (int i = 0; i < appSettings.recentProjects.size(); ++i)
+        recent.addItem (menuRecentBase + i, appSettings.recentProjects.getReference (i).getFullPathName());
+    if (appSettings.recentProjects.isEmpty())
     {
         recent.addItem (-1, jp (u8"（なし）"), false);
     }
@@ -300,7 +278,7 @@ void MainComponent::menuItemSelected (int menuItemID, int)
         saveProjectAs();
     else if (menuItemID == menuRecentClear)
     {
-        recentProjects.clear();
+        appSettings.clearRecent();
         saveAppSettings();
         menuItemsChanged();
     }
@@ -350,16 +328,9 @@ void MainComponent::timerCallback()
         controlSurface.refreshFeedback();
 }
 
-juce::File MainComponent::getAppDir() const
-{
-    return appDirectory();
-}
-
 juce::File MainComponent::getDefaultProjectsDir() const
 {
-    auto dir = juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("LiteHost");
-    dir.createDirectory();
-    return dir;
+    return AppPaths::defaultProjectsDirectory();
 }
 
 void MainComponent::setScanStatus (const juce::String& text)
@@ -412,7 +383,7 @@ void MainComponent::applyFirstRunAudioDefaults()
 void MainComponent::setupAudio()
 {
     deviceManager.addChangeListener (this);
-    const auto audioFile = getAppDir().getChildFile ("audio.xml");
+    const auto audioFile = AppPaths::audioFile();
     std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (audioFile));
     const bool firstRun = xml == nullptr;
 
@@ -471,7 +442,7 @@ void MainComponent::showAudioSettings()
 
 void MainComponent::markSetupWizardCompleted()
 {
-    setupWizardCompleted = true;
+    appSettings.setupWizardCompleted = true;
     saveAppSettings();
 }
 
@@ -552,7 +523,7 @@ void MainComponent::showSetupWizard (bool allowStarterTrackAutoCreate)
     for (int p = 0; p < path.getNumPaths(); ++p)
         defaults.add (path[p].getFullPathName());
 
-    auto panel = std::make_unique<SetupWizardPanel> (deviceManager, defaults, extraVstPaths);
+    auto panel = std::make_unique<SetupWizardPanel> (deviceManager, defaults, appSettings.extraVstPaths);
     auto* panelPtr = panel.get();
     panel->setSize (640, 580);
 
@@ -568,7 +539,7 @@ void MainComponent::showSetupWizard (bool allowStarterTrackAutoCreate)
     panelPtr->onFinished = [this, window, allowStarterTrackAutoCreate] {
         markSetupWizardCompleted();
         if (auto xml = deviceManager.createStateXml())
-            xml->writeTo (getAppDir().getChildFile ("audio.xml"));
+            xml->writeTo (AppPaths::audioFile());
         finishSetupWizardSession (allowStarterTrackAutoCreate);
         status.setText (makeStatusText(), juce::dontSendNotification);
         if (window != nullptr)
@@ -582,7 +553,7 @@ void MainComponent::showSetupWizard (bool allowStarterTrackAutoCreate)
         }
     };
     panelPtr->onCommitVstFolders = [this] (juce::StringArray extras, bool startScan) {
-        extraVstPaths = std::move (extras);
+        appSettings.extraVstPaths = std::move (extras);
         saveAppSettings();
         if (startScan)
             startPluginScan (buildScanPaths());
@@ -702,43 +673,12 @@ void MainComponent::showLearnMenuForTrack (int trackIndex, MidiLearnTarget targe
 
 juce::FileSearchPath MainComponent::defaultVst3ScanPaths() const
 {
-    // JUCE 既定には %LocalAppData%\Programs\Common\VST3（Users 配下）も含まれるが、
-    // 標準スキャンは Common Files\VST3 のみ。ユーザー領域は「フォルダを追加」で指定する。
-    juce::FileSearchPath paths;
-
-   #if JUCE_WINDOWS
-    paths.addIfNotAlreadyThere (juce::File::getSpecialLocation (juce::File::windowsProgramFilesCommon)
-                                    .getChildFile ("VST3"));
-
-    const juce::File x86Common ("C:\\Program Files (x86)\\Common Files\\VST3");
-    paths.addIfNotAlreadyThere (x86Common);
-   #else
-    for (int i = 0; i < formatManager.getNumFormats(); ++i)
-        if (auto* format = formatManager.getFormat (i); format != nullptr && format->getName() == "VST3")
-        {
-            const auto all = format->getDefaultLocationsToSearch();
-            const auto home = juce::File::getSpecialLocation (juce::File::userHomeDirectory);
-            for (int p = 0; p < all.getNumPaths(); ++p)
-            {
-                const auto& dir = all[p];
-                if (! dir.isAChildOf (home) && dir != home)
-                    paths.addIfNotAlreadyThere (dir);
-            }
-            break;
-        }
-   #endif
-
-    return paths;
+    return PluginScanCoordinator::defaultPaths (formatManager);
 }
 
 juce::FileSearchPath MainComponent::buildScanPaths() const
 {
-    auto paths = defaultVst3ScanPaths();
-
-    for (const auto& extra : extraVstPaths)
-        paths.addIfNotAlreadyThere (juce::File (extra));
-
-    return paths;
+    return PluginScanCoordinator::buildPaths (formatManager, appSettings.extraVstPaths);
 }
 
 void MainComponent::showScanDialog()
@@ -748,7 +688,7 @@ void MainComponent::showScanDialog()
     for (int p = 0; p < path.getNumPaths(); ++p)
         defaults.add (path[p].getFullPathName());
 
-    auto panel = std::make_unique<ScanFolderPanel> (defaults, extraVstPaths);
+    auto panel = std::make_unique<ScanFolderPanel> (defaults, appSettings.extraVstPaths);
     auto* panelPtr = panel.get();
     panel->setSize (560, 360);
 
@@ -766,7 +706,7 @@ void MainComponent::showScanDialog()
             window->exitModalState (0);
     };
     panelPtr->onScan = [this, panelPtr, window] {
-        extraVstPaths = panelPtr->getExtras();
+        appSettings.extraVstPaths = panelPtr->getExtras();
         saveAppSettings();
         if (window != nullptr)
             window->exitModalState (1);
@@ -776,10 +716,7 @@ void MainComponent::showScanDialog()
 
 void MainComponent::startPluginScan (const juce::FileSearchPath& paths)
 {
-    auto* format = formatManager.getFormat (0);
-    for (int i = 0; i < formatManager.getNumFormats(); ++i)
-        if (formatManager.getFormat (i)->getName() == "VST3")
-            format = formatManager.getFormat (i);
+    auto* format = PluginScanCoordinator::findVst3Format (formatManager);
 
     if (format == nullptr)
     {
@@ -847,6 +784,31 @@ void MainComponent::promptAddPlugin (const juce::Uuid& trackId, bool master)
                         });
 }
 
+PluginChain::PluginLoadResult MainComponent::loadPluginIntoChain (PluginChain& chain,
+                                                                  const PluginChain::PluginLoadRequest& request,
+                                                                  bool suspendBeforePrepare)
+{
+    const auto setup = deviceManager.getAudioDeviceSetup();
+    const double sr = setup.sampleRate > 0.0 ? setup.sampleRate
+                     : (engine.getSampleRate() > 0.0 ? engine.getSampleRate() : 48000.0);
+    const int bs = setup.bufferSize > 0 ? setup.bufferSize
+                 : (engine.getBlockSize() > 0 ? engine.getBlockSize() : 128);
+
+    CrashLog::write ("loadPlugin " + request.description.name
+                     + " sr=" + juce::String (sr) + " bs=" + juce::String (bs)
+                     + " suspendBefore=" + juce::String ((int) suspendBeforePrepare));
+
+    auto result = chain.loadPlugin (request, formatManager, sr, bs, &engine.getPlayHead(),
+                                    suspendBeforePrepare, &engine.getCallbackLock());
+    if (result.plugin == nullptr)
+        CrashLog::write ("loadPlugin FAILED " + request.description.name + " " + result.error);
+    else
+        CrashLog::write ("loadPlugin ok " + request.description.name
+                         + " outs=" + juce::String (result.plugin->getTotalNumOutputChannels())
+                         + " delayed=" + juce::String ((int) result.needsDelayedArm));
+    return result;
+}
+
 void MainComponent::attachPlugin (const juce::PluginDescription& description, const juce::Uuid& trackId, bool master)
 {
     PluginChain* chain = nullptr;
@@ -888,70 +850,34 @@ void MainComponent::attachPlugin (const juce::PluginDescription& description, co
         safe->deviceManager.closeAudioDevice();
         CrashLog::write ("audio closed");
 
-        const auto setup = safe->deviceManager.getAudioDeviceSetup();
-        const double useSr = setup.sampleRate > 0.0 ? setup.sampleRate : 48000.0;
-        const int useBs = setup.bufferSize > 0 ? setup.bufferSize : 128;
+        PluginChain::PluginLoadRequest request;
+        request.description = description;
+        const auto result = safe->loadPluginIntoChain (*chain, request, true);
 
-        CrashLog::write ("createPluginInstance sr=" + juce::String (useSr) + " bs=" + juce::String (useBs));
-        juce::String error;
-        auto instance = PluginChain::instantiate (description, safe->formatManager, useSr, useBs, error);
-        if (instance == nullptr)
+        if (result.plugin == nullptr)
         {
-            CrashLog::write ("create FAILED: " + error);
             safe->deviceManager.restartLastAudioDevice();
             safe->scanStatus.clear();
-            juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, jp (u8"プラグインを開けません"), error);
+            const auto message = result.error.isNotEmpty() && result.error != "prepare failed"
+                ? result.error
+                : jp (u8"プラグインの初期化に失敗しました。");
+            juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, jp (u8"プラグインを開けません"), message);
             return;
         }
 
         CrashLog::write ("created ch="
-                         + juce::String (instance->getTotalNumInputChannels()) + "/"
-                         + juce::String (instance->getTotalNumOutputChannels())
-                         + " buses=" + juce::String (instance->getBusCount (true))
-                         + "/" + juce::String (instance->getBusCount (false))
-                         + " midiIn=" + juce::String ((int) instance->acceptsMidi())
+                         + juce::String (result.plugin->getTotalNumInputChannels()) + "/"
+                         + juce::String (result.plugin->getTotalNumOutputChannels())
+                         + " buses=" + juce::String (result.plugin->getBusCount (true))
+                         + "/" + juce::String (result.plugin->getBusCount (false))
+                         + " midiIn=" + juce::String ((int) result.plugin->acceptsMidi())
                          + " instrument=" + juce::String ((int) description.isInstrument));
 
-        for (int i = 0; i < instance->getBusCount (false); ++i)
-            if (auto* bus = instance->getBus (false, i))
+        for (int i = 0; i < result.plugin->getBusCount (false); ++i)
+            if (auto* bus = result.plugin->getBus (false, i))
                 CrashLog::write ("  out[" + juce::String (i) + "] " + bus->getName()
                                  + " ch=" + juce::String (bus->getNumberOfChannels())
                                  + " en=" + juce::String ((int) bus->isEnabled()));
-
-        const bool needsLaunchDelay = description.name.containsIgnoreCase ("SyncRoom")
-                                   || description.name.containsIgnoreCase ("syncroom");
-
-        instance->suspendProcessing (true);
-        chain->setPlayHead (&safe->engine.getPlayHead());
-
-        CrashLog::write ("prepareInstance");
-        if (! PluginChain::prepareInstance (*instance, useSr, useBs, false, &safe->engine.getPlayHead()))
-        {
-            CrashLog::write ("prepare FAILED");
-            safe->deviceManager.restartLastAudioDevice();
-            safe->scanStatus.clear();
-            juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, jp (u8"プラグインを開けません"),
-                                                    jp (u8"プラグインの初期化に失敗しました。"));
-            return;
-        }
-        CrashLog::write ("prepare ok outs=" + juce::String (instance->getTotalNumOutputChannels()));
-
-        juce::AudioPluginInstance* added = nullptr;
-        {
-            const juce::ScopedLock sl (safe->engine.getCallbackLock());
-            added = chain->addPrepared (std::move (instance));
-            if (added != nullptr && ! needsLaunchDelay)
-                added->suspendProcessing (false);
-        }
-
-        if (added == nullptr)
-        {
-            CrashLog::write ("add FAILED");
-            safe->deviceManager.restartLastAudioDevice();
-            safe->scanStatus.clear();
-            return;
-        }
-        CrashLog::write ("added to chain suspended=" + juce::String ((int) added->isSuspended()));
 
         safe->rebuildStrips();
         CrashLog::write ("rebuildStrips done");
@@ -961,15 +887,15 @@ void MainComponent::attachPlugin (const juce::PluginDescription& description, co
         CrashLog::write ("audio restarted");
 
         safe->scanStatus.clear();
-        if (needsLaunchDelay)
+        if (result.needsDelayedArm)
         {
             safe->status.setText (jp (u8"プラグイン起動を待っています..."), juce::dontSendNotification);
-            safe->armPluginAfterLaunch (added);
+            safe->armPluginAfterLaunch (result.plugin);
             CrashLog::write ("attach complete (SyncRoom delayed arm)");
         }
         else
         {
-            added->suspendProcessing (false);
+            result.plugin->suspendProcessing (false);
             safe->status.setText (safe->makeStatusText(), juce::dontSendNotification);
             CrashLog::write ("attach complete (active)");
         }
@@ -998,8 +924,7 @@ void MainComponent::armPluginAfterLaunch (juce::AudioPluginInstance* plugin)
         return;
 
     const auto name = plugin->getName();
-    const bool needsLaunchDelay = name.containsIgnoreCase ("SyncRoom")
-                               || name.containsIgnoreCase ("syncroom");
+    const bool needsLaunchDelay = SyncRoomFinder::needsDelayedArm (*plugin);
 
     auto activate = [safe = juce::Component::SafePointer<MainComponent> (this), plugin] {
         if (safe == nullptr || ! safe->isPluginStillLoaded (plugin))
@@ -1136,16 +1061,16 @@ void MainComponent::reorderTrack (const juce::Uuid& fromId, const juce::Uuid& ta
 
 bool MainComponent::applySavedWindowState (juce::ResizableWindow& window)
 {
-    if (windowState.isEmpty())
+    if (appSettings.windowState.isEmpty())
         return false;
 
-    return window.restoreWindowStateFromString (windowState);
+    return window.restoreWindowStateFromString (appSettings.windowState);
 }
 
 void MainComponent::captureWindowState()
 {
     if (auto* top = dynamic_cast<juce::ResizableWindow*> (getTopLevelComponent()))
-        windowState = top->getWindowStateAsString();
+        appSettings.windowState = top->getWindowStateAsString();
 }
 
 void MainComponent::startUpdateCheck()
@@ -1157,7 +1082,7 @@ void MainComponent::startUpdateCheck()
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
                              : juce::String ("0.1.1");
 
-    updateChecker->start (current, skippedReleaseTag,
+    updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {
                               if (safe != nullptr)
                                   safe->showUpdateAvailable (result.version, result.tag, result.htmlUrl);
@@ -1187,7 +1112,7 @@ void MainComponent::showUpdateAvailable (const juce::String& version, const juce
         }
         else if (result == 2)
         {
-            safe->skippedReleaseTag = tag;
+            safe->appSettings.skippedReleaseTag = tag;
             safe->saveAppSettings();
         }
     });
@@ -1223,92 +1148,30 @@ void MainComponent::refreshAddPluginButtons()
 void MainComponent::savePluginList()
 {
     if (auto xml = knownPlugins.createXml())
-        xml->writeTo (getAppDir().getChildFile ("knownPlugins.xml"));
+        xml->writeTo (AppPaths::knownPluginsFile());
 }
 
 void MainComponent::loadPluginList()
 {
-    if (auto xml = juce::XmlDocument::parse (getAppDir().getChildFile ("knownPlugins.xml")))
+    if (auto xml = juce::XmlDocument::parse (AppPaths::knownPluginsFile()))
         knownPlugins.recreateFromXml (*xml);
 }
 
 void MainComponent::loadAppSettings()
 {
-    recentProjects.clear();
-    extraVstPaths.clear();
-    currentProject = {};
-    setupWizardCompleted = false;
-
-    auto xml = juce::XmlDocument::parse (getAppDir().getChildFile ("settings.xml"));
-    if (xml == nullptr || xml->getTagName() != "SETTINGS")
-        return;
-
-    // 既存ユーザーはフラグ無しでも完了済み扱い（アップグレードで突然出さない）
-    setupWizardCompleted = xml->getBoolAttribute ("setupWizardCompleted", true);
-    windowState = xml->getStringAttribute ("windowState");
-    skippedReleaseTag = xml->getStringAttribute ("skippedReleaseTag");
-
-    currentProject = juce::File (xml->getStringAttribute ("lastProject"));
-
-    if (auto* recent = xml->getChildByName ("RECENT"))
-        for (auto* child = recent->getFirstChildElement(); child != nullptr; child = child->getNextElement())
-            if (child->getTagName() == "PROJECT")
-            {
-                const juce::File file (child->getStringAttribute ("path"));
-                if (file.existsAsFile())
-                    recentProjects.addIfNotAlreadyThere (file);
-            }
-
-    if (auto* paths = xml->getChildByName ("VST_PATHS"))
-        for (auto* child = paths->getFirstChildElement(); child != nullptr; child = child->getNextElement())
-            if (child->getTagName() == "PATH")
-                extraVstPaths.addIfNotAlreadyThere (child->getStringAttribute ("value"));
-
-    engine.exclusiveSoloMode = xml->getBoolAttribute ("exclusiveSoloMode", false);
-
-    controlSurface.readXml (*xml);
-    midiLearn.readXml (*xml);
+    appSettings.load (engine, controlSurface, midiLearn);
 }
 
 void MainComponent::saveAppSettings()
 {
-    juce::XmlElement xml ("SETTINGS");
-    xml.setAttribute ("lastProject", currentProject.getFullPathName());
-    xml.setAttribute ("setupWizardCompleted", setupWizardCompleted ? 1 : 0);
-    xml.setAttribute ("windowState", windowState);
-    xml.setAttribute ("skippedReleaseTag", skippedReleaseTag);
-    xml.setAttribute ("exclusiveSoloMode", engine.exclusiveSoloMode.load() ? 1 : 0);
-
-    auto* recent = xml.createNewChildElement ("RECENT");
-    for (const auto& file : recentProjects)
-    {
-        auto* child = recent->createNewChildElement ("PROJECT");
-        child->setAttribute ("path", file.getFullPathName());
-    }
-
-    auto* paths = xml.createNewChildElement ("VST_PATHS");
-    for (const auto& path : extraVstPaths)
-    {
-        auto* child = paths->createNewChildElement ("PATH");
-        child->setAttribute ("value", path);
-    }
-
-    controlSurface.writeXml (xml);
-    midiLearn.writeXml (xml);
-    xml.writeTo (getAppDir().getChildFile ("settings.xml"));
+    appSettings.save (engine, controlSurface, midiLearn);
 }
 
 void MainComponent::rememberProject (const juce::File& file)
 {
+    appSettings.rememberProject (file);
     if (! file.existsAsFile())
         return;
-
-    currentProject = file;
-    recentProjects.removeAllInstancesOf (file);
-    recentProjects.insert (0, file);
-
-    while (recentProjects.size() > 10)
-        recentProjects.removeLast();
 
     saveAppSettings();
     updateWindowTitle();
@@ -1318,8 +1181,8 @@ void MainComponent::rememberProject (const juce::File& file)
 void MainComponent::updateWindowTitle()
 {
     juce::String titleText = "LiteHost";
-    if (currentProject != juce::File())
-        titleText << " - " << currentProject.getFileName();
+    if (appSettings.currentProject != juce::File())
+        titleText << " - " << appSettings.currentProject.getFileName();
 
     if (auto* top = getTopLevelComponent())
         if (auto* window = dynamic_cast<juce::DocumentWindow*> (top))
@@ -1359,7 +1222,7 @@ bool MainComponent::loadProjectFile (const juce::File& file)
     if (xml == nullptr || xml->getTagName() != "LITEHOST")
         return false;
 
-    const int pluginTotal = countPluginElements (*xml);
+    const int pluginTotal = ProjectStore::countPlugins (*xml);
     std::unique_ptr<StartupSplashWindow> ownedSplash;
     StartupProgress* progress = startupProgress;
     if (progress == nullptr && pluginTotal > 0)
@@ -1377,110 +1240,12 @@ bool MainComponent::loadProjectFile (const juce::File& file)
     deviceManager.closeAudioDevice();
 
     std::vector<juce::AudioPluginInstance*> delayedArm;
-    int pluginsLoaded = 0;
-
-    auto restoreChain = [this, &delayedArm, &pluginsLoaded, pluginTotal, progress] (PluginChain& chain, juce::XmlElement& parent) {
-        const auto setup = deviceManager.getAudioDeviceSetup();
-        const double sr = setup.sampleRate > 0.0 ? setup.sampleRate
-                                                 : (engine.getSampleRate() > 0.0 ? engine.getSampleRate() : 48000.0);
-        const int bs = setup.bufferSize > 0 ? setup.bufferSize : 128;
-
-        for (auto* child = parent.getFirstChildElement(); child != nullptr; child = child->getNextElement())
-        {
-            if (child->getTagName() != "PLUGIN")
-                continue;
-            if (! chain.canAdd())
-                break;
-
-            juce::PluginDescription description;
-            if (! description.loadFromXml (*child))
-                continue;
-
-            CrashLog::write ("load plugin " + description.name);
-            ++pluginsLoaded;
-            if (progress != nullptr)
-            {
-                const double p = pluginTotal > 0
-                    ? 0.32 + 0.58 * ((double) pluginsLoaded / (double) pluginTotal)
-                    : 0.7;
-                progress->setStatus (jp (u8"読み込み中: ") + description.name
-                                         + "  (" + juce::String (pluginsLoaded)
-                                         + "/" + juce::String (pluginTotal) + ")",
-                                     p);
-            }
-
-            juce::String error;
-            auto instance = PluginChain::instantiate (description, formatManager, sr, bs, error);
-            if (instance == nullptr)
-            {
-                CrashLog::write ("load plugin FAILED " + description.name + " " + error);
-                continue;
-            }
-
-            if (child->hasAttribute ("state"))
-            {
-                juce::MemoryBlock state;
-                state.fromBase64Encoding (child->getStringAttribute ("state"));
-                instance->setStateInformation (state.getData(), (int) state.getSize());
-            }
-
-            if (! PluginChain::prepareInstance (*instance, sr, bs, false, &engine.getPlayHead()))
-            {
-                CrashLog::write ("prepare FAILED " + description.name);
-                continue;
-            }
-
-            const bool needsLaunchDelay = description.name.containsIgnoreCase ("SyncRoom")
-                                       || description.name.containsIgnoreCase ("syncroom");
-            instance->suspendProcessing (needsLaunchDelay);
-            if (auto* added = chain.addPrepared (std::move (instance)))
-            {
-                const int index = chain.size() - 1;
-                chain.setBypassed (index, child->getBoolAttribute ("bypass", false));
-                if (needsLaunchDelay)
-                    delayedArm.push_back (added);
-            }
-        }
-    };
-
-    if (auto* master = xml->getChildByName ("MASTER"))
-    {
-        engine.reverbEnabled = master->getBoolAttribute ("reverb", false);
-        engine.limiterEnabled = master->getBoolAttribute ("limiter", false);
-        engine.gateEnabled = master->getBoolAttribute ("gate", false);
-        engine.reverbWet = (float) master->getDoubleAttribute ("wet", 0.18);
-        engine.reverbRoom = (float) master->getDoubleAttribute ("room", 0.42);
-        engine.reverbDamping = (float) master->getDoubleAttribute ("damping", 0.4);
-        engine.limiterThresholdDb = (float) master->getDoubleAttribute ("ceiling", -0.3);
-        engine.gateThresholdDb = (float) master->getDoubleAttribute ("gateThreshold", -52.0);
-        engine.masterGain = (float) master->getDoubleAttribute ("gain", 1.0);
-        restoreChain (engine.masterPlugins(), *master);
-    }
-
-    if (auto* tracks = xml->getChildByName ("TRACKS"))
-    {
-        for (auto* child = tracks->getFirstChildElement(); child != nullptr; child = child->getNextElement())
-        {
-            if (child->getTagName() != "TRACK")
-                continue;
-
-            auto* track = engine.addTrack (child->getStringAttribute ("name", jp (u8"トラック")));
-            track->inputStart = child->getIntAttribute ("inputStart", 0);
-            track->inputCount = child->getIntAttribute ("inputCount", 2);
-            track->midiDeviceId = child->getStringAttribute ("midiInput");
-            if (track->midiDeviceId.isNotEmpty())
-                track->inputStart = -1;
-            track->trim = (float) child->getDoubleAttribute ("trim", 1.0);
-            track->gain = (float) child->getDoubleAttribute ("gain", 1.0);
-            track->pan = (float) child->getDoubleAttribute ("pan", 0.0);
-            track->mute = child->getBoolAttribute ("mute", false);
-            track->solo = child->getBoolAttribute ("solo", false);
-            track->soloOverride = child->getBoolAttribute ("soloOverride", false)
-                               || child->getBoolAttribute ("exclusiveSolo", false);
-            restoreChain (track->plugins, *child);
-            ++trackSerial;
-        }
-    }
+    ProjectStore::loadIntoEngine (*xml, engine, trackSerial, delayedArm,
+                                  [this] (PluginChain& chain, const PluginChain::PluginLoadRequest& request, bool suspendBeforePrepare) {
+                                      CrashLog::write ("load plugin " + request.description.name);
+                                      return loadPluginIntoChain (chain, request, suspendBeforePrepare);
+                                  },
+                                  progress);
 
     ensureDefaultTrack();
     syncTrackMidiInputs();
@@ -1502,72 +1267,7 @@ bool MainComponent::loadProjectFile (const juce::File& file)
 
 bool MainComponent::saveProjectFile (const juce::File& file)
 {
-    juce::XmlElement xml ("LITEHOST");
-    xml.setAttribute ("version", 1);
-
-    auto* master = xml.createNewChildElement ("MASTER");
-    master->setAttribute ("reverb", engine.reverbEnabled.load());
-    master->setAttribute ("limiter", engine.limiterEnabled.load());
-    master->setAttribute ("gate", engine.gateEnabled.load());
-    master->setAttribute ("wet", engine.reverbWet.load());
-    master->setAttribute ("room", engine.reverbRoom.load());
-    master->setAttribute ("damping", engine.reverbDamping.load());
-    master->setAttribute ("ceiling", engine.limiterThresholdDb.load());
-    master->setAttribute ("gateThreshold", engine.gateThresholdDb.load());
-    master->setAttribute ("gain", engine.masterGain.load());
-
-    for (int i = 0; i < engine.masterPlugins().size(); ++i)
-    {
-        auto descXml = engine.masterPlugins().descriptionAt (i).createXml();
-        if (descXml == nullptr)
-            continue;
-
-        descXml->setTagName ("PLUGIN");
-        if (auto* plugin = engine.masterPlugins().get (i))
-        {
-            juce::MemoryBlock state;
-            plugin->getStateInformation (state);
-            descXml->setAttribute ("state", state.toBase64Encoding());
-        }
-        descXml->setAttribute ("bypass", engine.masterPlugins().isBypassed (i) ? 1 : 0);
-        master->addChildElement (descXml.release());
-    }
-
-    auto* tracks = xml.createNewChildElement ("TRACKS");
-    for (auto& track : engine.tracks())
-    {
-        auto* child = tracks->createNewChildElement ("TRACK");
-        child->setAttribute ("name", track->name);
-        child->setAttribute ("inputStart", track->inputStart.load());
-        child->setAttribute ("inputCount", track->inputCount.load());
-        if (track->midiDeviceId.isNotEmpty())
-            child->setAttribute ("midiInput", track->midiDeviceId);
-        child->setAttribute ("trim", track->trim.load());
-        child->setAttribute ("gain", track->gain.load());
-        child->setAttribute ("pan", track->pan.load());
-        child->setAttribute ("mute", track->mute.load());
-        child->setAttribute ("solo", track->solo.load());
-        child->setAttribute ("soloOverride", track->soloOverride.load());
-
-        for (int i = 0; i < track->plugins.size(); ++i)
-        {
-            auto descXml = track->plugins.descriptionAt (i).createXml();
-            if (descXml == nullptr)
-                continue;
-
-            descXml->setTagName ("PLUGIN");
-            if (auto* plugin = track->plugins.get (i))
-            {
-                juce::MemoryBlock state;
-                plugin->getStateInformation (state);
-                descXml->setAttribute ("state", state.toBase64Encoding());
-            }
-            descXml->setAttribute ("bypass", track->plugins.isBypassed (i) ? 1 : 0);
-            child->addChildElement (descXml.release());
-        }
-    }
-
-    if (! xml.writeTo (file))
+    if (! ProjectStore::saveToFile (file, engine))
         return false;
 
     rememberProject (file);
@@ -1577,7 +1277,7 @@ bool MainComponent::saveProjectFile (const juce::File& file)
 void MainComponent::newProject()
 {
     clearProjectState();
-    currentProject = {};
+    appSettings.currentProject = {};
     ensureDefaultTrack();
     rebuildStrips();
     saveAppSettings();
@@ -1587,7 +1287,7 @@ void MainComponent::newProject()
 void MainComponent::openProject()
 {
     auto chooser = std::make_shared<juce::FileChooser> (jp (u8"プロジェクトを開く"),
-                                                        currentProject.existsAsFile() ? currentProject.getParentDirectory()
+                                                        appSettings.currentProject.existsAsFile() ? appSettings.currentProject.getParentDirectory()
                                                                                       : getDefaultProjectsDir(),
                                                         "*.litehost;*.xml");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
@@ -1601,13 +1301,13 @@ void MainComponent::openProject()
 
 void MainComponent::saveProject()
 {
-    if (currentProject == juce::File() || ! currentProject.hasWriteAccess())
+    if (appSettings.currentProject == juce::File() || ! appSettings.currentProject.hasWriteAccess())
     {
         saveProjectAs();
         return;
     }
 
-    if (! saveProjectFile (currentProject))
+    if (! saveProjectFile (appSettings.currentProject))
         juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
                                                 jp (u8"プロジェクトの保存に失敗しました。"));
 }
@@ -1632,10 +1332,10 @@ void MainComponent::saveProjectAs()
 
 void MainComponent::openRecentProject (int index)
 {
-    if (! juce::isPositiveAndBelow (index, recentProjects.size()))
+    if (! juce::isPositiveAndBelow (index, appSettings.recentProjects.size()))
         return;
 
-    const auto file = recentProjects.getReference (index);
+    const auto file = appSettings.recentProjects.getReference (index);
     if (! loadProjectFile (file))
         juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
                                                 jp (u8"プロジェクトを開けませんでした。"));
@@ -1645,8 +1345,8 @@ void MainComponent::saveAll()
 {
     captureWindowState();
 
-    if (currentProject != juce::File())
-        saveProjectFile (currentProject);
+    if (appSettings.currentProject != juce::File())
+        saveProjectFile (appSettings.currentProject);
     else
     {
         const auto fallback = getDefaultProjectsDir().getChildFile ("Autosave.litehost");
@@ -1657,7 +1357,7 @@ void MainComponent::saveAll()
     saveAppSettings();
 
     if (auto xml = deviceManager.createStateXml())
-        xml->writeTo (getAppDir().getChildFile ("audio.xml"));
+        xml->writeTo (AppPaths::audioFile());
 }
 
 juce::String MainComponent::makeStatusText() const
@@ -1700,23 +1400,9 @@ juce::String MainComponent::makeStatusText() const
     return jp (u8"オーディオデバイスが開かれていません") + surfaceBit;
 }
 
-TrackProcessor* MainComponent::trackAt (int index) const
-{
-    const juce::ScopedLock sl (engine.getCallbackLock());
-    const auto& tracks = engine.tracks();
-    if (! juce::isPositiveAndBelow (index, (int) tracks.size()))
-        return nullptr;
-    return tracks[(size_t) index].get();
-}
-
 int MainComponent::indexOfTrack (const TrackProcessor& track) const
 {
-    const juce::ScopedLock sl (engine.getCallbackLock());
-    const auto& tracks = engine.tracks();
-    for (int i = 0; i < (int) tracks.size(); ++i)
-        if (tracks[(size_t) i].get() == &track)
-            return i;
-    return -1;
+    return mixer.indexOfTrack (track);
 }
 
 void MainComponent::syncStripsFromEngine()
@@ -1727,42 +1413,17 @@ void MainComponent::syncStripsFromEngine()
         masterStrip->syncTogglesFromEngine();
 }
 
-int MainComponent::getNumTracks() const
+void MainComponent::mixerUiChanged()
 {
-    return engine.getTrackCount();
-}
+    auto sync = [safe = juce::Component::SafePointer<MainComponent> (this)] {
+        if (safe != nullptr)
+            safe->syncStripsFromEngine();
+    };
 
-float MainComponent::getTrackGain (int trackIndex) const
-{
-    if (auto* track = trackAt (trackIndex))
-        return track->gain.load();
-    return 1.0f;
-}
-
-float MainComponent::getTrackPan (int trackIndex) const
-{
-    if (auto* track = trackAt (trackIndex))
-        return track->pan.load();
-    return 0.0f;
-}
-
-bool MainComponent::getTrackMute (int trackIndex) const
-{
-    if (auto* track = trackAt (trackIndex))
-        return track->mute.load();
-    return false;
-}
-
-bool MainComponent::getTrackSolo (int trackIndex) const
-{
-    if (auto* track = trackAt (trackIndex))
-        return track->solo.load();
-    return false;
-}
-
-float MainComponent::getMasterGain() const
-{
-    return engine.masterGain.load();
+    if (juce::MessageManager::getInstance()->isThisTheMessageThread())
+        sync();
+    else
+        juce::MessageManager::callAsync (sync);
 }
 
 bool MainComponent::isAudioEngineRunning() const
@@ -1770,147 +1431,12 @@ bool MainComponent::isAudioEngineRunning() const
     return audioEngineRunning;
 }
 
-void MainComponent::setTrackGain (int trackIndex, float gainLinear)
-{
-    if (auto* track = trackAt (trackIndex))
-        track->gain = juce::jlimit (0.0f, juce::Decibels::decibelsToGain (12.0f), gainLinear);
-
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
-        if (safe != nullptr)
-            safe->syncStripsFromEngine();
-    });
-}
-
-void MainComponent::setTrackTrim (int trackIndex, float gainLinear)
-{
-    if (auto* track = trackAt (trackIndex))
-        track->trim = juce::jlimit (0.0f, juce::Decibels::decibelsToGain (24.0f), gainLinear);
-
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
-        if (safe != nullptr)
-            safe->syncStripsFromEngine();
-    });
-}
-
-void MainComponent::setTrackPan (int trackIndex, float panValue)
-{
-    if (auto* track = trackAt (trackIndex))
-        track->pan = juce::jlimit (-1.0f, 1.0f, panValue);
-
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
-        if (safe != nullptr)
-            safe->syncStripsFromEngine();
-    });
-}
-
-void MainComponent::setTrackMute (int trackIndex, bool mute)
-{
-    if (auto* track = trackAt (trackIndex))
-        track->mute = mute;
-
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
-        if (safe != nullptr)
-            safe->syncStripsFromEngine();
-    });
-}
-
 void MainComponent::applySoloClick (const juce::Uuid& trackId, bool shift)
 {
-    if (auto* track = engine.findTrack (trackId))
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        if (shift)
-            track->soloOverride = ! track->soloOverride.load();
-        else
-            engine.setTrackSolo (*track, ! track->solo.load());
-    }
-
+    mixer.applySoloClick (trackId, shift);
     syncStripsFromEngine();
     controlSurface.refreshFeedback();
     status.setText (makeStatusText(), juce::dontSendNotification);
-}
-
-void MainComponent::setTrackSolo (int trackIndex, bool solo)
-{
-    if (auto* track = trackAt (trackIndex))
-        engine.setTrackSolo (*track, solo);
-
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
-        if (safe != nullptr)
-            safe->syncStripsFromEngine();
-    });
-}
-
-void MainComponent::syncMasterStripAsync()
-{
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (this)] {
-        if (safe == nullptr || safe->masterStrip == nullptr)
-            return;
-        safe->masterStrip->syncTogglesFromEngine();
-    });
-}
-
-void MainComponent::setMasterGain (float gainLinear)
-{
-    engine.masterGain = juce::jlimit (0.0f, juce::Decibels::decibelsToGain (12.0f), gainLinear);
-    syncMasterStripAsync();
-}
-
-bool MainComponent::getReverbEnabled() const
-{
-    return engine.reverbEnabled.load();
-}
-
-void MainComponent::setReverbEnabled (bool enabled)
-{
-    engine.reverbEnabled = enabled;
-    syncMasterStripAsync();
-}
-
-void MainComponent::setReverbMix (float wet)
-{
-    engine.reverbWet = juce::jlimit (0.0f, 1.0f, wet);
-    syncMasterStripAsync();
-}
-
-void MainComponent::setReverbSize (float size)
-{
-    engine.reverbRoom = juce::jlimit (0.0f, 1.0f, size);
-    syncMasterStripAsync();
-}
-
-bool MainComponent::getLimiterEnabled() const
-{
-    return engine.limiterEnabled.load();
-}
-
-void MainComponent::setLimiterEnabled (bool enabled)
-{
-    engine.limiterEnabled = enabled;
-    syncMasterStripAsync();
-}
-
-void MainComponent::setLimiterCeilingDb (float db)
-{
-    engine.limiterThresholdDb = juce::jlimit (-12.0f, 0.0f, db);
-    syncMasterStripAsync();
-}
-
-bool MainComponent::getGateEnabled() const
-{
-    return engine.gateEnabled.load();
-}
-
-void MainComponent::setGateEnabled (bool enabled)
-{
-    engine.gateEnabled = enabled;
-    syncMasterStripAsync();
-}
-
-void MainComponent::setGateThresholdDb (float db)
-{
-    engine.gateThresholdDb = juce::jlimit (-80.0f, -24.0f, db);
-    syncMasterStripAsync();
 }
 
 void MainComponent::midiLearnFinished (bool assigned)

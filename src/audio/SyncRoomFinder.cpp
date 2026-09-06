@@ -46,9 +46,14 @@ namespace
     }
 }
 
+bool SyncRoomFinder::isSyncRoomName (const juce::String& name)
+{
+    return name.containsIgnoreCase ("syncroom");
+}
+
 bool SyncRoomFinder::isPreferredDescription (const juce::PluginDescription& type)
 {
-    if (! type.name.containsIgnoreCase ("syncroom"))
+    if (! isSyncRoomName (type.name))
         return false;
     if (type.name.containsIgnoreCase ("multiout"))
         return false;
@@ -61,12 +66,26 @@ bool SyncRoomFinder::isBridge2 (const juce::PluginDescription& type)
         || type.fileOrIdentifier.containsIgnoreCase ("syncroom_vst_bridge2");
 }
 
+bool SyncRoomFinder::needsDelayedArm (const juce::PluginDescription& type)
+{
+    return isSyncRoomName (type.name);
+}
+
+bool SyncRoomFinder::needsDelayedArm (const juce::AudioPluginInstance& plugin)
+{
+    return isSyncRoomName (plugin.getName());
+}
+
+bool SyncRoomFinder::shouldKeepPrepared (const juce::AudioPluginInstance& plugin)
+{
+    return isSyncRoomName (plugin.getName());
+}
+
 bool SyncRoomFinder::chainContains (const PluginChain& chain)
 {
     for (int i = 0; i < chain.size(); ++i)
         if (auto* plugin = chain.get (i))
-            if (plugin->getName().containsIgnoreCase ("SyncRoom")
-                || plugin->getName().containsIgnoreCase ("syncroom"))
+            if (isSyncRoomName (plugin->getName()))
                 return true;
     return false;
 }
@@ -110,7 +129,7 @@ bool SyncRoomFinder::findDescription (const juce::KnownPluginList& known,
 
             for (const auto& file : dir.findChildFiles (juce::File::findFilesAndDirectories, true, "*.vst3"))
             {
-                if (! file.getFileName().containsIgnoreCase ("syncroom"))
+                if (! isSyncRoomName (file.getFileName()))
                     continue;
 
                 considerFile (*format, file, bridge, haveBridge, fallback, haveFallback);

@@ -126,7 +126,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     mute.setButtonText ("M");
     mute.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LiteLookAndFeel::danger));
     mute.setToggleState (track.mute.load(), juce::dontSendNotification);
-    mute.onClick = [this] { track.mute = mute.getToggleState(); };
+    mute.onClick = [this] { owner.getMixer().setTrackMute (track, mute.getToggleState()); };
     mute.addMouseListener (&learnClicks, false);
     addAndMakeVisible (mute);
 
@@ -144,7 +144,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     configureChannelFader (gain);
     gain.setValue ((double) juce::Decibels::gainToDecibels (track.gain.load(), -60.0f), juce::dontSendNotification);
     gain.onValueChange = [this] {
-        track.gain = juce::Decibels::decibelsToGain ((float) gain.getValue(), -60.0f);
+        owner.getMixer().setTrackGain (track, juce::Decibels::decibelsToGain ((float) gain.getValue(), -60.0f));
     };
     gain.addMouseListener (&learnClicks, false);
     addAndMakeVisible (gain);
@@ -162,7 +162,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     trim.setTextValueSuffix (" dB");
     trim.setDoubleClickReturnValue (true, 0.0);
     trim.onValueChange = [this] {
-        track.trim = juce::Decibels::decibelsToGain ((float) trim.getValue(), -24.0f);
+        owner.getMixer().setTrackTrim (track, juce::Decibels::decibelsToGain ((float) trim.getValue(), -24.0f));
     };
     trim.addMouseListener (&learnClicks, false);
     addAndMakeVisible (trim);
@@ -195,7 +195,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
             return juce::jlimit (0.0, 1.0, s.substring (1).getDoubleValue() / 100.0);
         return juce::jlimit (-1.0, 1.0, s.getDoubleValue());
     };
-    pan.onValueChange = [this] { track.pan = (float) pan.getValue(); };
+    pan.onValueChange = [this] { owner.getMixer().setTrackPan (track, (float) pan.getValue()); };
     pan.addMouseListener (&learnClicks, false);
     addAndMakeVisible (pan);
 
@@ -495,23 +495,23 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
 
     reverbToggle.setButtonText (jp (u8"リバーブ"));
     reverbToggle.setClickingTogglesState (true);
-    reverbToggle.setToggleState (owner.getEngine().reverbEnabled.load(), juce::dontSendNotification);
-    reverbToggle.onClick = [this] { owner.getEngine().reverbEnabled = reverbToggle.getToggleState(); };
+    reverbToggle.setToggleState (owner.getMixer().getReverbEnabled(), juce::dontSendNotification);
+    reverbToggle.onClick = [this] { owner.getMixer().setReverbEnabled (reverbToggle.getToggleState(), false); };
     reverbToggle.addMouseListener (&learnClicks, false);
     addAndMakeVisible (reverbToggle);
 
     limiterToggle.setButtonText (jp (u8"リミッター"));
     limiterToggle.setClickingTogglesState (true);
-    limiterToggle.setToggleState (owner.getEngine().limiterEnabled.load(), juce::dontSendNotification);
-    limiterToggle.onClick = [this] { owner.getEngine().limiterEnabled = limiterToggle.getToggleState(); };
+    limiterToggle.setToggleState (owner.getMixer().getLimiterEnabled(), juce::dontSendNotification);
+    limiterToggle.onClick = [this] { owner.getMixer().setLimiterEnabled (limiterToggle.getToggleState(), false); };
     limiterToggle.addMouseListener (&learnClicks, false);
     addAndMakeVisible (limiterToggle);
 
     gateToggle.setButtonText (jp (u8"ゲート"));
     gateToggle.setClickingTogglesState (true);
-    gateToggle.setToggleState (owner.getEngine().gateEnabled.load(), juce::dontSendNotification);
+    gateToggle.setToggleState (owner.getMixer().getGateEnabled(), juce::dontSendNotification);
     gateToggle.setTooltip (jp (u8"ノイズゲート。閾値を超えたら通す。それ以下は出さない。"));
-    gateToggle.onClick = [this] { owner.getEngine().gateEnabled = gateToggle.getToggleState(); };
+    gateToggle.onClick = [this] { owner.getMixer().setGateEnabled (gateToggle.getToggleState(), false); };
     gateToggle.addMouseListener (&learnClicks, false);
     addAndMakeVisible (gateToggle);
 
@@ -524,14 +524,14 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
     };
 
     setupSlider (reverbMix, 0.0, 1.0, 0.01, (double) owner.getEngine().reverbWet.load(), "");
-    reverbMix.onValueChange = [this] { owner.getEngine().reverbWet = (float) reverbMix.getValue(); };
+    reverbMix.onValueChange = [this] { owner.getMixer().setReverbMix ((float) reverbMix.getValue(), false); };
     reverbMix.addMouseListener (&learnClicks, false);
     addAndMakeVisible (reverbMix);
     addAndMakeVisible (reverbMixLabel);
     reverbMixLabel.setText ("Mix", juce::dontSendNotification);
 
     setupSlider (reverbSize, 0.0, 1.0, 0.01, (double) owner.getEngine().reverbRoom.load(), "");
-    reverbSize.onValueChange = [this] { owner.getEngine().reverbRoom = (float) reverbSize.getValue(); };
+    reverbSize.onValueChange = [this] { owner.getMixer().setReverbSize ((float) reverbSize.getValue(), false); };
     reverbSize.addMouseListener (&learnClicks, false);
     addAndMakeVisible (reverbSize);
     addAndMakeVisible (reverbSizeLabel);
@@ -539,7 +539,7 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
 
     setupSlider (limitCeiling, -12.0, 0.0, 0.1, (double) owner.getEngine().limiterThresholdDb.load(), " dB");
     limitCeiling.setTooltip (jp (u8"シーリング。超えたピークだけこの値まで下げる。それ以下は触らない。"));
-    limitCeiling.onValueChange = [this] { owner.getEngine().limiterThresholdDb = (float) limitCeiling.getValue(); };
+    limitCeiling.onValueChange = [this] { owner.getMixer().setLimiterCeilingDb ((float) limitCeiling.getValue(), false); };
     limitCeiling.addMouseListener (&learnClicks, false);
     addAndMakeVisible (limitCeiling);
     addAndMakeVisible (limitLabel);
@@ -548,7 +548,7 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
     setupSlider (gateThreshold, -80.0, -24.0, 0.5, (double) owner.getEngine().gateThresholdDb.load(), " dB");
     gateThreshold.setSkewFactorFromMidPoint (-50.0);
     gateThreshold.setTooltip (jp (u8"この値を超えたら出力。以下は出さない。右に振りすぎると演奏まで消えるので、-24 dB が上限。"));
-    gateThreshold.onValueChange = [this] { owner.getEngine().gateThresholdDb = (float) gateThreshold.getValue(); };
+    gateThreshold.onValueChange = [this] { owner.getMixer().setGateThresholdDb ((float) gateThreshold.getValue(), false); };
     gateThreshold.addMouseListener (&learnClicks, false);
     addAndMakeVisible (gateThreshold);
     addAndMakeVisible (gateLabel);
@@ -558,7 +558,7 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
     masterGain.setValue ((double) juce::Decibels::gainToDecibels (owner.getEngine().masterGain.load(), -60.0f),
                          juce::dontSendNotification);
     masterGain.onValueChange = [this] {
-        owner.getEngine().masterGain = juce::Decibels::decibelsToGain ((float) masterGain.getValue(), -60.0f);
+        owner.getMixer().setMasterGain (juce::Decibels::decibelsToGain ((float) masterGain.getValue(), -60.0f), false);
     };
     masterGain.addMouseListener (&learnClicks, false);
     addAndMakeVisible (masterGain);
@@ -647,14 +647,14 @@ void MasterStrip::refreshPlugins()
 
 void MasterStrip::syncTogglesFromEngine()
 {
-    reverbToggle.setToggleState (owner.getEngine().reverbEnabled.load(), juce::dontSendNotification);
-    limiterToggle.setToggleState (owner.getEngine().limiterEnabled.load(), juce::dontSendNotification);
-    gateToggle.setToggleState (owner.getEngine().gateEnabled.load(), juce::dontSendNotification);
+    reverbToggle.setToggleState (owner.getMixer().getReverbEnabled(), juce::dontSendNotification);
+    limiterToggle.setToggleState (owner.getMixer().getLimiterEnabled(), juce::dontSendNotification);
+    gateToggle.setToggleState (owner.getMixer().getGateEnabled(), juce::dontSendNotification);
     reverbMix.setValue ((double) owner.getEngine().reverbWet.load(), juce::dontSendNotification);
     reverbSize.setValue ((double) owner.getEngine().reverbRoom.load(), juce::dontSendNotification);
     limitCeiling.setValue ((double) owner.getEngine().limiterThresholdDb.load(), juce::dontSendNotification);
     gateThreshold.setValue ((double) owner.getEngine().gateThresholdDb.load(), juce::dontSendNotification);
-    masterGain.setValue ((double) juce::Decibels::gainToDecibels (owner.getEngine().masterGain.load(), -60.0f),
+    masterGain.setValue ((double) juce::Decibels::gainToDecibels (owner.getMixer().getMasterGain(), -60.0f),
                          juce::dontSendNotification);
 }
 

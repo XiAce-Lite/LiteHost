@@ -48,6 +48,16 @@ target_sources(LiteHost PRIVATE
     src/Main.cpp
     src/Utf8.h
     src/CrashLog.h
+    src/app/AppPaths.h
+    src/app/AppPaths.cpp
+    src/app/AppSettingsStore.h
+    src/app/AppSettingsStore.cpp
+    src/app/ProjectStore.h
+    src/app/ProjectStore.cpp
+    src/app/PluginScanCoordinator.h
+    src/app/PluginScanCoordinator.cpp
+    src/session/MixerSession.h
+    src/session/MixerSession.cpp
     src/audio/PluginChain.h
     src/audio/PluginChain.cpp
     src/audio/AudioEngine.h

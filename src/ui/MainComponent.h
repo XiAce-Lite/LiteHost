@@ -3,9 +3,11 @@
 #include "LookAndFeel.h"
 #include "Utf8.h"
 #include "MixerStrips.h"
+#include "app/AppSettingsStore.h"
 #include "audio/AudioEngine.h"
 #include "control/ControlSurface.h"
 #include "control/MidiLearn.h"
+#include "session/MixerSession.h"
 
 class PluginEditorWindow;
 class PluginScanThread;
@@ -18,8 +20,7 @@ class MainComponent : public juce::Component,
                       public juce::MenuBarModel,
                       public juce::ChangeListener,
                       public juce::Timer,
-                      public ControlSurfaceListener,
-                      public MidiLearnListener
+                      public MixerSession::Host
 {
 public:
     explicit MainComponent (juce::String projectPathToOpen = {}, StartupProgress* progress = nullptr);
@@ -34,7 +35,6 @@ public:
     juce::PopupMenu getMenuForIndex (int topLevelMenuIndex, const juce::String& menuName) override;
     void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
 
-    juce::File getAppDir() const;
     void setScanStatus (const juce::String& text);
     void scanFinished();
 
@@ -54,37 +54,14 @@ public:
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     AudioEngine& getEngine() noexcept { return engine; }
+    MixerSession& getMixer() noexcept { return mixer; }
     int indexOfTrack (const TrackProcessor& track) const;
 
-    // ControlSurfaceListener / MidiLearnListener shared
-    int getNumTracks() const override;
-    float getTrackGain (int trackIndex) const override;
-    float getTrackPan (int trackIndex) const override;
-    bool getTrackMute (int trackIndex) const override;
-    bool getTrackSolo (int trackIndex) const override;
-    float getMasterGain() const override;
     bool isAudioEngineRunning() const override;
-    void setTrackGain (int trackIndex, float gainLinear) override;
-    void setTrackPan (int trackIndex, float pan) override;
-    void setTrackMute (int trackIndex, bool mute) override;
-    void setTrackSolo (int trackIndex, bool solo) override;
-    void setMasterGain (float gainLinear) override;
     void setAudioEngineRunning (bool shouldRun) override;
     void controlSurfaceBankChanged (int bankOffset) override;
-
-    // MidiLearnListener
-    void setTrackTrim (int trackIndex, float gainLinear) override;
-    bool getReverbEnabled() const override;
-    void setReverbEnabled (bool enabled) override;
-    void setReverbMix (float wet) override;
-    void setReverbSize (float size) override;
-    bool getLimiterEnabled() const override;
-    void setLimiterEnabled (bool enabled) override;
-    void setLimiterCeilingDb (float db) override;
-    bool getGateEnabled() const override;
-    void setGateEnabled (bool enabled) override;
-    void setGateThresholdDb (float db) override;
     void midiLearnFinished (bool assigned) override;
+    void mixerUiChanged() override;
 
 private:
     enum MenuIds
@@ -131,6 +108,9 @@ private:
     void updateWindowTitle();
     void rebuildStrips();
     void attachPlugin (const juce::PluginDescription& description, const juce::Uuid& trackId, bool master);
+    PluginChain::PluginLoadResult loadPluginIntoChain (PluginChain& chain,
+                                                       const PluginChain::PluginLoadRequest& request,
+                                                       bool suspendBeforePrepare);
     void armPluginAfterLaunch (juce::AudioPluginInstance* plugin);
     bool isPluginStillLoaded (juce::AudioPluginInstance* plugin) const;
     void refreshAddPluginButtons();
@@ -138,9 +118,7 @@ private:
     juce::FileSearchPath defaultVst3ScanPaths() const;
     juce::FileSearchPath buildScanPaths() const;
     juce::File getDefaultProjectsDir() const;
-    TrackProcessor* trackAt (int index) const;
     void syncStripsFromEngine();
-    void syncMasterStripAsync();
     void captureWindowState();
     void startUpdateCheck();
     void showUpdateAvailable (const juce::String& version, const juce::String& tag, const juce::String& url);
@@ -154,6 +132,8 @@ private:
     AudioEngine engine;
     ControlSurfaceManager controlSurface;
     MidiLearnManager midiLearn;
+    AppSettingsStore appSettings;
+    MixerSession mixer;
     bool audioEngineRunning = true;
 
     juce::MenuBarComponent menuBar;
@@ -176,14 +156,8 @@ private:
 
     juce::String scanStatus;
     int trackSerial = 1;
-    juce::File currentProject;
-    juce::Array<juce::File> recentProjects;
-    juce::StringArray extraVstPaths;
     juce::String startupProjectPath;
-    juce::String windowState;
-    juce::String skippedReleaseTag;
     std::unique_ptr<UpdateChecker> updateChecker;
-    bool setupWizardCompleted = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
 };
