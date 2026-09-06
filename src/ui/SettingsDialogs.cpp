@@ -124,7 +124,7 @@ MidiLearnSettingsPanel::MidiLearnSettingsPanel (MidiLearnManager& learnIn)
     title.setFont (LiteLookAndFeel::uiFont (16.0f, juce::Font::bold));
     addAndMakeVisible (title);
 
-    hint.setText (jp (u8"学習用 MIDI 入力を選び、トラックの Trim/フェーダー/Pan/M/S を右クリックして学習します。"),
+    hint.setText (jp (u8"学習用 MIDI 入力を選び、トラックの Trim/フェーダー/Pan/M/S、またはメインアウトのフェーダー・リバーブ・リミッター・ゲートを右クリックして学習します。"),
                   juce::dontSendNotification);
     hint.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
     addAndMakeVisible (hint);

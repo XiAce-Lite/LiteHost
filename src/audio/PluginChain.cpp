@@ -63,15 +63,36 @@ void PluginChain::prepare (double newSampleRate, int samplesPerBlock, juce::Audi
             continue;
 
         const bool wasSuspended = slot.plugin->isSuspended();
-        // Do not releaseResources()+setActive again if the plugin is already live.
-        // SyncRoom crashes when setActive is toggled while its app is still launching.
         const bool alreadyLive = slot.plugin->getSampleRate() > 0.0
                               && slot.plugin->getBlockSize() > 0;
         const bool settingsChanged = ! juce::approximatelyEqual (slot.plugin->getSampleRate(), sampleRate)
                                   || slot.plugin->getBlockSize() != blockSize;
 
-        if (! alreadyLive || settingsChanged)
-            prepareInstance (*slot.plugin, sampleRate, blockSize, alreadyLive && settingsChanged, playHead);
+        // SyncRoom stays prepared across device close/open. Calling
+        // releaseResources() then skipping prepareToPlay (JUCE still reports the
+        // old rate/block) left it silent until the instance was destroyed.
+        // Re-prepare with releaseFirst also crashes it during app launch.
+        if (shouldKeepPrepared (*slot.plugin) && ! slot.needsPrepare)
+        {
+            if (playHead != nullptr)
+                slot.plugin->setPlayHead (playHead);
+
+            if (settingsChanged)
+                prepareInstance (*slot.plugin, sampleRate, blockSize, false, playHead);
+
+            refreshSlotChannels (slot);
+            slot.plugin->suspendProcessing (wasSuspended);
+            continue;
+        }
+
+        // After a real release, getSampleRate()/getBlockSize() usually stay set,
+        // so "already live" would skip prepareToPlay and leave the plug dead.
+        if (slot.needsPrepare || ! alreadyLive || settingsChanged)
+            prepareInstance (*slot.plugin, sampleRate, blockSize,
+                             alreadyLive && settingsChanged && ! slot.needsPrepare,
+                             playHead);
+
+        slot.needsPrepare = false;
 
         if (playHead != nullptr)
             slot.plugin->setPlayHead (playHead);
@@ -85,8 +106,16 @@ void PluginChain::release()
 {
     prepared = false;
     for (auto& slot : slots)
-        if (slot.plugin != nullptr)
-            slot.plugin->releaseResources();
+    {
+        if (slot.plugin == nullptr)
+            continue;
+
+        if (shouldKeepPrepared (*slot.plugin))
+            continue;
+
+        slot.plugin->releaseResources();
+        slot.needsPrepare = true;
+    }
 }
 
 void PluginChain::refreshSlotChannels (Slot& slot) noexcept
@@ -96,6 +125,11 @@ void PluginChain::refreshSlotChannels (Slot& slot) noexcept
 
     slot.numIns = slot.plugin->getTotalNumInputChannels();
     slot.numOuts = slot.plugin->getTotalNumOutputChannels();
+}
+
+bool PluginChain::shouldKeepPrepared (const juce::AudioPluginInstance& plugin) noexcept
+{
+    return plugin.getName().containsIgnoreCase ("syncroom");
 }
 
 void PluginChain::processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& incomingMidi) noexcept

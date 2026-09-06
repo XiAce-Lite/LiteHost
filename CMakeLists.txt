@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(LiteHost VERSION 0.1.0 LANGUAGES C CXX)
+project(LiteHost VERSION 0.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,13 +24,22 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(LiteHost
     PRODUCT_NAME "LiteHost"
-    VERSION "0.1.0"
+    VERSION "0.1.1"
     COMPANY_NAME "LiteHost"
     BUNDLE_ID com.litehost.app
+    ICON_BIG "${CMAKE_SOURCE_DIR}/assets/icon.png"
+    ICON_SMALL "${CMAKE_SOURCE_DIR}/assets/icon.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "Used to capture audio interface input"
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE
+)
+
+juce_add_binary_data(LiteHostAssets
+    HEADER_NAME BinaryData.h
+    NAMESPACE BinaryData
+    SOURCES
+        assets/icon.png
 )
 
 juce_generate_juce_header(LiteHost)
@@ -66,6 +75,10 @@ target_sources(LiteHost PRIVATE
     src/ui/PluginEditorWindow.cpp
     src/ui/PluginScanThread.h
     src/ui/PluginScanThread.cpp
+    src/ui/UpdateChecker.h
+    src/ui/UpdateChecker.cpp
+    src/ui/StartupSplash.h
+    src/ui/StartupSplash.cpp
     src/ui/MainComponent.h
     src/ui/MainComponent.cpp
 )
@@ -97,6 +110,7 @@ if(MSVC)
 endif()
 
 target_link_libraries(LiteHost PRIVATE
+    LiteHostAssets
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags

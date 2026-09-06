@@ -9,8 +9,12 @@
 
 class PluginEditorWindow;
 class PluginScanThread;
+class TrackStrip;
+class UpdateChecker;
+class StartupProgress;
 
 class MainComponent : public juce::Component,
+                      public juce::DragAndDropContainer,
                       public juce::MenuBarModel,
                       public juce::ChangeListener,
                       public juce::Timer,
@@ -18,7 +22,7 @@ class MainComponent : public juce::Component,
                       public MidiLearnListener
 {
 public:
-    explicit MainComponent (juce::String projectPathToOpen = {});
+    explicit MainComponent (juce::String projectPathToOpen = {}, StartupProgress* progress = nullptr);
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
@@ -43,6 +47,10 @@ public:
     void runSyncRoomLoadTest();
     void showLearnMenuForTrack (int trackIndex, MidiLearnTarget target);
     void syncTrackMidiInputs();
+    void beginTrackDrag (TrackStrip& strip);
+    void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter);
+    void applySoloClick (const juce::Uuid& trackId, bool shift);
+    bool applySavedWindowState (juce::ResizableWindow& window);
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     AudioEngine& getEngine() noexcept { return engine; }
@@ -66,6 +74,16 @@ public:
 
     // MidiLearnListener
     void setTrackTrim (int trackIndex, float gainLinear) override;
+    bool getReverbEnabled() const override;
+    void setReverbEnabled (bool enabled) override;
+    void setReverbMix (float wet) override;
+    void setReverbSize (float size) override;
+    bool getLimiterEnabled() const override;
+    void setLimiterEnabled (bool enabled) override;
+    void setLimiterCeilingDb (float db) override;
+    bool getGateEnabled() const override;
+    void setGateEnabled (bool enabled) override;
+    void setGateThresholdDb (float db) override;
     void midiLearnFinished (bool assigned) override;
 
 private:
@@ -122,7 +140,13 @@ private:
     juce::File getDefaultProjectsDir() const;
     TrackProcessor* trackAt (int index) const;
     void syncStripsFromEngine();
+    void syncMasterStripAsync();
+    void captureWindowState();
+    void startUpdateCheck();
+    void showUpdateAvailable (const juce::String& version, const juce::String& tag, const juce::String& url);
+    void reportStartup (const juce::String& text, double progress01);
 
+    StartupProgress* startupProgress = nullptr;
     LiteLookAndFeel lookAndFeel;
     juce::AudioDeviceManager deviceManager;
     juce::AudioPluginFormatManager formatManager;
@@ -141,6 +165,7 @@ private:
     juce::TextButton learnButton { jp (u8"MIDI学習") };
     juce::TextButton scanButton { jp (u8"VST3 スキャン") };
     juce::TextButton addTrackButton { jp (u8"トラック追加") };
+    juce::TextButton exclusiveSoloButton { jp (u8"排他ソロ") };
 
     juce::Viewport trackViewport;
     juce::Component trackList;
@@ -155,6 +180,9 @@ private:
     juce::Array<juce::File> recentProjects;
     juce::StringArray extraVstPaths;
     juce::String startupProjectPath;
+    juce::String windowState;
+    juce::String skippedReleaseTag;
+    std::unique_ptr<UpdateChecker> updateChecker;
     bool setupWizardCompleted = true;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)

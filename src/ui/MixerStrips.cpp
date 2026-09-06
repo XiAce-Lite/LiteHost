@@ -29,6 +29,17 @@ namespace
     constexpr int midiComboIdBase = 10000;
     constexpr int midiAllComboId = 9999;
 
+    void configureChannelFader (juce::Slider& slider)
+    {
+        slider.setSliderStyle (juce::Slider::LinearVertical);
+        slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 18);
+        slider.setRange (-60.0, 12.0, 0.1);
+        // 0 dB at mid-throw so boost isn't crammed into the last few pixels.
+        slider.setSkewFactorFromMidPoint (0.0);
+        slider.setTextValueSuffix (" dB");
+        slider.setDoubleClickReturnValue (true, 0.0);
+    }
+
     int midiComboId (int deviceIndex)
     {
         return midiComboIdBase + deviceIndex;
@@ -47,7 +58,10 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     name.setText (track.name, juce::dontSendNotification);
     name.setFont (LiteLookAndFeel::uiFont (14.0f));
     name.setJustificationType (juce::Justification::centred);
-    name.setEditable (true, true, false);
+    name.setEditable (false, true, false);
+    name.setTooltip (jp (u8"ドラッグで順を変更 / ダブルクリックで名前変更"));
+    name.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    name.addMouseListener (this, false);
     name.setColour (juce::Label::backgroundColourId, juce::Colour (LiteLookAndFeel::raised));
     name.setColour (juce::Label::outlineColourId, juce::Colour (0xff3a4254));
     name.setColour (juce::Label::textWhenEditingColourId, juce::Colour (LiteLookAndFeel::text));
@@ -61,6 +75,10 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
         track.name = text;
     };
     addAndMakeVisible (name);
+
+    dragGrip.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    dragGrip.addMouseListener (this, false);
+    addAndMakeVisible (dragGrip);
 
     input.setTextWhenNoChoicesAvailable (jp (u8"入力なし"));
     input.onChange = [this] {
@@ -112,20 +130,19 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     mute.addMouseListener (&learnClicks, false);
     addAndMakeVisible (mute);
 
-    solo.setClickingTogglesState (true);
+    solo.setClickingTogglesState (false);
     solo.setButtonText ("S");
     solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LiteLookAndFeel::solo));
-    solo.setToggleState (track.solo.load(), juce::dontSendNotification);
-    solo.onClick = [this] { track.solo = solo.getToggleState(); };
+    solo.setTooltip (jp (u8"クリック: ソロ\nShift+クリック: Solo Override（他がソロでも残る。もう一度 Shift で解除）\nヘッダーの排他ソロ ON 時は、ソロは1本だけ"));
+    solo.onClick = [this] {
+        owner.applySoloClick (track.id, juce::ModifierKeys::getCurrentModifiers().isShiftDown());
+    };
     solo.addMouseListener (&learnClicks, false);
     addAndMakeVisible (solo);
+    updateSoloButton();
 
-    gain.setSliderStyle (juce::Slider::LinearVertical);
-    gain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 18);
-    gain.setRange (-60.0, 12.0, 0.1);
+    configureChannelFader (gain);
     gain.setValue ((double) juce::Decibels::gainToDecibels (track.gain.load(), -60.0f), juce::dontSendNotification);
-    gain.setTextValueSuffix (" dB");
-    gain.setDoubleClickReturnValue (true, 0.0);
     gain.onValueChange = [this] {
         track.gain = juce::Decibels::decibelsToGain ((float) gain.getValue(), -60.0f);
     };
@@ -135,6 +152,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     trimLabel.setText ("Trim", juce::dontSendNotification);
     trimLabel.setJustificationType (juce::Justification::centred);
     trimLabel.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
+    trimLabel.addMouseListener (this, false);
     addAndMakeVisible (trimLabel);
 
     trim.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -152,9 +170,10 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     panLabel.setText ("Pan", juce::dontSendNotification);
     panLabel.setJustificationType (juce::Justification::centred);
     panLabel.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
+    panLabel.addMouseListener (this, false);
     addAndMakeVisible (panLabel);
 
-    pan.setSliderStyle (juce::Slider::LinearHorizontal);
+    pan.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
     pan.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 16);
     pan.setRange (-1.0, 1.0, 0.01);
     pan.setValue ((double) track.pan.load(), juce::dontSendNotification);
@@ -211,11 +230,96 @@ void TrackStrip::paint (juce::Graphics& g)
     g.fillRoundedRectangle (r, 8.0f);
     g.setColour (juce::Colour (0xff2c3344));
     g.drawRoundedRectangle (r, 8.0f, 1.0f);
+
+    const auto grip = dragGrip.getBounds().toFloat().reduced (3.0f, 10.0f);
+    g.setColour (juce::Colour (LiteLookAndFeel::muted).withAlpha (0.55f));
+    const float x0 = grip.getX();
+    const float x1 = x0 + 5.0f;
+    for (float y = grip.getY(); y + 3.0f < grip.getBottom(); y += 6.0f)
+    {
+        g.fillRoundedRectangle (x0, y, 3.0f, 3.0f, 1.0f);
+        g.fillRoundedRectangle (x1, y, 3.0f, 3.0f, 1.0f);
+    }
+
+    if (dropBefore || dropAfter)
+    {
+        g.setColour (juce::Colour (LiteLookAndFeel::accent));
+        const float x = dropBefore ? r.getX() + 2.0f : r.getRight() - 3.0f;
+        g.fillRoundedRectangle (x, r.getY() + 6.0f, 3.0f, r.getHeight() - 12.0f, 1.5f);
+    }
+}
+
+void TrackStrip::mouseDown (const juce::MouseEvent&)
+{
+}
+
+void TrackStrip::mouseDrag (const juce::MouseEvent& e)
+{
+    if (name.isBeingEdited())
+        return;
+
+    if (! isTrackDragSource (e.eventComponent))
+        return;
+
+    if (e.getDistanceFromDragStart() < 5)
+        return;
+
+    owner.beginTrackDrag (*this);
+}
+
+bool TrackStrip::isTrackDragSource (const juce::Component* component) const noexcept
+{
+    return component == this
+        || component == &name
+        || component == &dragGrip
+        || component == &trimLabel
+        || component == &panLabel;
+}
+
+bool TrackStrip::isInterestedInDragSource (const SourceDetails& details)
+{
+    return details.description.toString().startsWith (dragType);
+}
+
+void TrackStrip::itemDragEnter (const SourceDetails& details)
+{
+    itemDragMove (details);
+}
+
+void TrackStrip::itemDragMove (const SourceDetails& details)
+{
+    const bool before = details.localPosition.x < getWidth() / 2;
+    dropBefore = before;
+    dropAfter = ! before;
+    repaint();
+}
+
+void TrackStrip::itemDragExit (const SourceDetails&)
+{
+    dropBefore = dropAfter = false;
+    repaint();
+}
+
+void TrackStrip::itemDropped (const SourceDetails& details)
+{
+    const bool after = details.localPosition.x >= getWidth() / 2;
+    dropBefore = dropAfter = false;
+    repaint();
+
+    const auto desc = details.description.toString();
+    const auto prefix = juce::String (dragType) + ":";
+    if (! desc.startsWith (prefix))
+        return;
+
+    owner.reorderTrack (juce::Uuid (desc.fromFirstOccurrenceOf (":", false, false)),
+                        track.id, after);
 }
 
 void TrackStrip::resized()
 {
-    auto r = getLocalBounds().reduced (10, 10);
+    auto r = getLocalBounds().reduced (8, 8);
+    dragGrip.setBounds (r.removeFromLeft (18));
+    r.removeFromLeft (4);
     name.setBounds (r.removeFromTop (28));
     r.removeFromTop (6);
     input.setBounds (r.removeFromTop (28));
@@ -226,15 +330,16 @@ void TrackStrip::resized()
     solo.setBounds (ms.reduced (2, 0));
     r.removeFromTop (4);
 
-    auto trimRow = r.removeFromTop (72);
+    auto trimRow = r.removeFromTop (64);
     trimLabel.setBounds (trimRow.removeFromTop (14));
     trim.setBounds (trimRow);
 
-    panLabel.setBounds (r.removeFromTop (14));
-    pan.setBounds (r.removeFromTop (34));
+    auto panRow = r.removeFromTop (64);
+    panLabel.setBounds (panRow.removeFromTop (14));
+    pan.setBounds (panRow);
     r.removeFromTop (4);
 
-    auto meterRow = r.removeFromTop (100);
+    auto meterRow = r.removeFromTop (168);
     meter.setBounds (meterRow.removeFromRight (14).reduced (0, 4));
     gain.setBounds (meterRow);
 
@@ -332,10 +437,25 @@ juce::Uuid TrackStrip::getTrackId() const
     return track.id;
 }
 
+void TrackStrip::updateSoloButton()
+{
+    if (track.soloOverride.load())
+    {
+        solo.setButtonText ("S+");
+        solo.setToggleState (true, juce::dontSendNotification);
+        solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LiteLookAndFeel::soloOverride));
+        return;
+    }
+
+    solo.setButtonText ("S");
+    solo.setToggleState (track.solo.load(), juce::dontSendNotification);
+    solo.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LiteLookAndFeel::solo));
+}
+
 void TrackStrip::syncFromTrack()
 {
     mute.setToggleState (track.mute.load(), juce::dontSendNotification);
-    solo.setToggleState (track.solo.load(), juce::dontSendNotification);
+    updateSoloButton();
     gain.setValue ((double) juce::Decibels::gainToDecibels (track.gain.load(), -60.0f),
                    juce::dontSendNotification);
     trim.setValue ((double) juce::Decibels::gainToDecibels (track.trim.load(), -24.0f),
@@ -377,13 +497,23 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
     reverbToggle.setClickingTogglesState (true);
     reverbToggle.setToggleState (owner.getEngine().reverbEnabled.load(), juce::dontSendNotification);
     reverbToggle.onClick = [this] { owner.getEngine().reverbEnabled = reverbToggle.getToggleState(); };
+    reverbToggle.addMouseListener (&learnClicks, false);
     addAndMakeVisible (reverbToggle);
 
     limiterToggle.setButtonText (jp (u8"リミッター"));
     limiterToggle.setClickingTogglesState (true);
     limiterToggle.setToggleState (owner.getEngine().limiterEnabled.load(), juce::dontSendNotification);
     limiterToggle.onClick = [this] { owner.getEngine().limiterEnabled = limiterToggle.getToggleState(); };
+    limiterToggle.addMouseListener (&learnClicks, false);
     addAndMakeVisible (limiterToggle);
+
+    gateToggle.setButtonText (jp (u8"ゲート"));
+    gateToggle.setClickingTogglesState (true);
+    gateToggle.setToggleState (owner.getEngine().gateEnabled.load(), juce::dontSendNotification);
+    gateToggle.setTooltip (jp (u8"ノイズゲート。閾値を超えたら通す。それ以下は出さない。"));
+    gateToggle.onClick = [this] { owner.getEngine().gateEnabled = gateToggle.getToggleState(); };
+    gateToggle.addMouseListener (&learnClicks, false);
+    addAndMakeVisible (gateToggle);
 
     auto setupSlider = [] (juce::Slider& slider, double min, double max, double step, double value, const juce::String& suffix) {
         slider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -395,32 +525,42 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
 
     setupSlider (reverbMix, 0.0, 1.0, 0.01, (double) owner.getEngine().reverbWet.load(), "");
     reverbMix.onValueChange = [this] { owner.getEngine().reverbWet = (float) reverbMix.getValue(); };
+    reverbMix.addMouseListener (&learnClicks, false);
     addAndMakeVisible (reverbMix);
     addAndMakeVisible (reverbMixLabel);
     reverbMixLabel.setText ("Mix", juce::dontSendNotification);
 
     setupSlider (reverbSize, 0.0, 1.0, 0.01, (double) owner.getEngine().reverbRoom.load(), "");
     reverbSize.onValueChange = [this] { owner.getEngine().reverbRoom = (float) reverbSize.getValue(); };
+    reverbSize.addMouseListener (&learnClicks, false);
     addAndMakeVisible (reverbSize);
     addAndMakeVisible (reverbSizeLabel);
     reverbSizeLabel.setText ("Size", juce::dontSendNotification);
 
     setupSlider (limitCeiling, -12.0, 0.0, 0.1, (double) owner.getEngine().limiterThresholdDb.load(), " dB");
+    limitCeiling.setTooltip (jp (u8"シーリング。超えたピークだけこの値まで下げる。それ以下は触らない。"));
     limitCeiling.onValueChange = [this] { owner.getEngine().limiterThresholdDb = (float) limitCeiling.getValue(); };
+    limitCeiling.addMouseListener (&learnClicks, false);
     addAndMakeVisible (limitCeiling);
     addAndMakeVisible (limitLabel);
     limitLabel.setText ("Ceiling", juce::dontSendNotification);
 
-    masterGain.setSliderStyle (juce::Slider::LinearVertical);
-    masterGain.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 18);
-    masterGain.setRange (-60.0, 12.0, 0.1);
+    setupSlider (gateThreshold, -80.0, -24.0, 0.5, (double) owner.getEngine().gateThresholdDb.load(), " dB");
+    gateThreshold.setSkewFactorFromMidPoint (-50.0);
+    gateThreshold.setTooltip (jp (u8"この値を超えたら出力。以下は出さない。右に振りすぎると演奏まで消えるので、-24 dB が上限。"));
+    gateThreshold.onValueChange = [this] { owner.getEngine().gateThresholdDb = (float) gateThreshold.getValue(); };
+    gateThreshold.addMouseListener (&learnClicks, false);
+    addAndMakeVisible (gateThreshold);
+    addAndMakeVisible (gateLabel);
+    gateLabel.setText (jp (u8"閾値"), juce::dontSendNotification);
+
+    configureChannelFader (masterGain);
     masterGain.setValue ((double) juce::Decibels::gainToDecibels (owner.getEngine().masterGain.load(), -60.0f),
                          juce::dontSendNotification);
-    masterGain.setTextValueSuffix (" dB");
-    masterGain.setDoubleClickReturnValue (true, 0.0);
     masterGain.onValueChange = [this] {
         owner.getEngine().masterGain = juce::Decibels::decibelsToGain ((float) masterGain.getValue(), -60.0f);
     };
+    masterGain.addMouseListener (&learnClicks, false);
     addAndMakeVisible (masterGain);
     addAndMakeVisible (masterGainLabel);
     masterGainLabel.setText (jp (u8"出力"), juce::dontSendNotification);
@@ -482,6 +622,12 @@ void MasterStrip::resized()
     limiterToggle.setBounds (row2.removeFromLeft (104));
     limitLabel.setBounds (row2.removeFromLeft (58));
     limitCeiling.setBounds (row2.removeFromLeft (160));
+
+    r.removeFromTop (8);
+    auto row3 = r.removeFromTop (32);
+    gateToggle.setBounds (row3.removeFromLeft (104));
+    gateLabel.setBounds (row3.removeFromLeft (58));
+    gateThreshold.setBounds (row3.removeFromLeft (160));
 }
 
 void MasterStrip::refreshPlugins()
@@ -503,9 +649,11 @@ void MasterStrip::syncTogglesFromEngine()
 {
     reverbToggle.setToggleState (owner.getEngine().reverbEnabled.load(), juce::dontSendNotification);
     limiterToggle.setToggleState (owner.getEngine().limiterEnabled.load(), juce::dontSendNotification);
+    gateToggle.setToggleState (owner.getEngine().gateEnabled.load(), juce::dontSendNotification);
     reverbMix.setValue ((double) owner.getEngine().reverbWet.load(), juce::dontSendNotification);
     reverbSize.setValue ((double) owner.getEngine().reverbRoom.load(), juce::dontSendNotification);
     limitCeiling.setValue ((double) owner.getEngine().limiterThresholdDb.load(), juce::dontSendNotification);
+    gateThreshold.setValue ((double) owner.getEngine().gateThresholdDb.load(), juce::dontSendNotification);
     masterGain.setValue ((double) juce::Decibels::gainToDecibels (owner.getEngine().masterGain.load(), -60.0f),
                          juce::dontSendNotification);
 }
@@ -514,4 +662,32 @@ void MasterStrip::setPeak (float value)
 {
     meter.setLevel (value);
     meter.tick (50.0f);
+}
+
+void MasterStrip::LearnClickListener::mouseDown (const juce::MouseEvent& e)
+{
+    if (! e.mods.isPopupMenu())
+        return;
+
+    MidiLearnTarget target = MidiLearnTarget::masterGain;
+    if (e.eventComponent == &strip.masterGain)
+        target = MidiLearnTarget::masterGain;
+    else if (e.eventComponent == &strip.reverbToggle)
+        target = MidiLearnTarget::reverbEnabled;
+    else if (e.eventComponent == &strip.reverbMix)
+        target = MidiLearnTarget::reverbMix;
+    else if (e.eventComponent == &strip.reverbSize)
+        target = MidiLearnTarget::reverbSize;
+    else if (e.eventComponent == &strip.limiterToggle)
+        target = MidiLearnTarget::limiterEnabled;
+    else if (e.eventComponent == &strip.limitCeiling)
+        target = MidiLearnTarget::limiterCeiling;
+    else if (e.eventComponent == &strip.gateToggle)
+        target = MidiLearnTarget::gateEnabled;
+    else if (e.eventComponent == &strip.gateThreshold)
+        target = MidiLearnTarget::gateThreshold;
+    else
+        return;
+
+    strip.owner.showLearnMenuForTrack (midiLearnMasterTrack, target);
 }

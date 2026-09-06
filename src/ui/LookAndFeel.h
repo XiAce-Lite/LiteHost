@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <cmath>
 
 class LiteLookAndFeel : public juce::LookAndFeel_V4
 {
@@ -13,6 +14,7 @@ public:
     static constexpr juce::uint32 muted = 0xff9aa3b5;
     static constexpr juce::uint32 danger = 0xffe85d5d;
     static constexpr juce::uint32 solo = 0xffe6c35c;
+    static constexpr juce::uint32 soloOverride = 0xffff9a3c;
 
     static juce::StringArray cjkFallbackNames()
     {
@@ -109,6 +111,34 @@ public:
     juce::Font getAlertWindowFont() override { return uiFont (14.0f); }
     juce::Font getMenuBarFont (juce::MenuBarComponent&, int, const juce::String&) override { return uiFont (14.0f); }
     juce::Font getSliderPopupFont (juce::Slider&) override { return uiFont (13.0f); }
+
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
+                           const float rotaryStartAngle, const float rotaryEndAngle, juce::Slider&) override
+    {
+        const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height).reduced (3.0f);
+        const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f - 2.0f;
+        const auto cx = bounds.getCentreX();
+        const auto cy = bounds.getCentreY();
+        const auto midAngle = rotaryStartAngle + 0.5f * (rotaryEndAngle - rotaryStartAngle);
+        const auto valueAngle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+
+        auto spoke = [cx, cy] (float angle, float inner, float outer) {
+            const auto s = std::sin (angle);
+            const auto c = std::cos (angle);
+            return juce::Line<float> (cx + inner * s, cy - inner * c, cx + outer * s, cy - outer * c);
+        };
+
+        g.setColour (juce::Colour (muted));
+        g.drawEllipse (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.4f);
+
+        // Centre-of-travel tick (short radial mark; vertical when the range centre is 12 o'clock).
+        g.setColour (juce::Colour (text));
+        g.drawLine (spoke (midAngle, radius - 6.0f, radius + 1.0f), 1.6f);
+
+        g.setColour (juce::Colour (text).withAlpha (0.92f));
+        g.drawLine (spoke (valueAngle, 4.0f, radius - 5.0f), 1.8f);
+        g.fillEllipse (cx - 2.2f, cy - 2.2f, 4.4f, 4.4f);
+    }
 
     juce::Label* createComboBoxTextBox (juce::ComboBox& box) override
     {

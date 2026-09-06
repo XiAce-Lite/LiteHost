@@ -194,7 +194,9 @@ void AudioEngine::audioDeviceStopped()
 
     masterPlugins_.release();
     reverb.reset();
-    limiter.reset();
+    gateEnv = 0.0f;
+    gateGain = 1.0f;
+    gateOpen = true;
 }
 
 void AudioEngine::prepareGraph()
@@ -214,9 +216,6 @@ void AudioEngine::prepareGraph()
 
     masterPlugins_.prepare (sampleRate, blockSize, &playHead);
     reverb.prepare (spec);
-    limiter.prepare (spec);
-    limiter.setThreshold (limiterThresholdDb.load());
-    limiter.setRelease (limiterReleaseMs.load());
 }
 
 TrackProcessor* AudioEngine::addTrack (juce::String name)
@@ -240,6 +239,43 @@ void AudioEngine::removeTrack (const juce::Uuid& id)
     trackCount.store ((int) tracks_.size(), std::memory_order_relaxed);
 }
 
+bool AudioEngine::hasSoloOverride() const noexcept
+{
+    for (auto& track : tracks_)
+        if (track->soloOverride.load (std::memory_order_relaxed))
+            return true;
+
+    return false;
+}
+
+void AudioEngine::setTrackSolo (TrackProcessor& track, bool shouldSolo)
+{
+    if (shouldSolo && exclusiveSoloMode.load (std::memory_order_relaxed))
+    {
+        for (auto& other : tracks_)
+            if (other.get() != &track)
+                other->solo.store (false, std::memory_order_relaxed);
+    }
+
+    track.solo.store (shouldSolo, std::memory_order_relaxed);
+}
+
+bool AudioEngine::moveTrack (int fromIndex, int destIndex)
+{
+    const int n = (int) tracks_.size();
+    if (! juce::isPositiveAndBelow (fromIndex, n))
+        return false;
+
+    destIndex = juce::jlimit (0, n - 1, destIndex);
+    if (fromIndex == destIndex)
+        return false;
+
+    auto item = std::move (tracks_[(size_t) fromIndex]);
+    tracks_.erase (tracks_.begin() + fromIndex);
+    tracks_.insert (tracks_.begin() + destIndex, std::move (item));
+    return true;
+}
+
 void AudioEngine::clearTracksAndMaster()
 {
     tracks_.clear();
@@ -247,20 +283,22 @@ void AudioEngine::clearTracksAndMaster()
     masterPlugins_.clear();
     reverbEnabled = false;
     limiterEnabled = false;
+    gateEnabled = false;
     reverbWet = 0.18f;
     reverbRoom = 0.42f;
     reverbDamping = 0.4f;
     reverbWidth = 1.0f;
     limiterThresholdDb = -0.3f;
-    limiterReleaseMs = 80.0f;
+    gateThresholdDb = -52.0f;
     masterGain = 1.0f;
+    gateEnv = 0.0f;
+    gateGain = 1.0f;
+    gateOpen = true;
     masterPeak = 0.0f;
     appliedReverbRoom = -1.0f;
     appliedReverbDamping = -1.0f;
     appliedReverbWet = -1.0f;
     appliedReverbWidth = -1.0f;
-    appliedLimiterThreshold = 1.0e6f;
-    appliedLimiterRelease = -1.0f;
 }
 
 TrackProcessor* AudioEngine::findTrack (const juce::Uuid& id) const
@@ -302,19 +340,77 @@ void AudioEngine::updateBuiltInParameters() noexcept
         }
     }
 
-    const bool wantLimiter = limiterEnabled.load (std::memory_order_relaxed);
-    if (wantLimiter)
-    {
-        const float threshold = limiterThresholdDb.load (std::memory_order_relaxed);
-        const float release = limiterReleaseMs.load (std::memory_order_relaxed);
+}
 
-        if (! juce::approximatelyEqual (threshold, appliedLimiterThreshold)
-            || ! juce::approximatelyEqual (release, appliedLimiterRelease))
+void AudioEngine::applyGate (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+{
+    if (numSamples <= 0)
+        return;
+
+    const float sr = sampleRate > 0.0 ? (float) sampleRate : 48000.0f;
+    const float openLin = juce::Decibels::decibelsToGain (gateThresholdDb.load (std::memory_order_relaxed));
+    const float closeLin = openLin * 0.63f; // ~4 dB hysteresis
+    const float attack = 1.0f - std::exp (-1.0f / (0.003f * sr));
+    const float release = 1.0f - std::exp (-1.0f / (0.080f * sr));
+    const float envRel = 1.0f - std::exp (-1.0f / (0.020f * sr));
+
+    auto* left = buffer.getWritePointer (0);
+    auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : left;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float peak = juce::jmax (std::abs (left[i]), std::abs (right[i]));
+        if (peak > gateEnv)
+            gateEnv = peak;
+        else
+            gateEnv += (peak - gateEnv) * envRel;
+
+        if (gateOpen)
         {
-            limiter.setThreshold (threshold);
-            limiter.setRelease (release);
-            appliedLimiterThreshold = threshold;
-            appliedLimiterRelease = release;
+            if (gateEnv < closeLin)
+                gateOpen = false;
+        }
+        else if (gateEnv >= openLin)
+        {
+            gateOpen = true;
+        }
+
+        const float target = gateOpen ? 1.0f : 0.0f;
+        gateGain += (target - gateGain) * (gateOpen ? attack : release);
+
+        if (gateGain <= 1.0e-4f)
+        {
+            left[i] = 0.0f;
+            if (right != left)
+                right[i] = 0.0f;
+        }
+        else if (gateGain < 0.999f)
+        {
+            left[i] *= gateGain;
+            if (right != left)
+                right[i] *= gateGain;
+        }
+    }
+}
+
+void AudioEngine::applyCeiling (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+{
+    const float ceiling = juce::Decibels::decibelsToGain (limiterThresholdDb.load (std::memory_order_relaxed));
+    if (ceiling <= 0.0f || numSamples <= 0)
+        return;
+
+    auto* left = buffer.getWritePointer (0);
+    auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : left;
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const float peak = juce::jmax (std::abs (left[i]), std::abs (right[i]));
+        if (peak > ceiling)
+        {
+            const float g = ceiling / peak;
+            left[i] *= g;
+            if (right != left)
+                right[i] *= g;
         }
     }
 }
@@ -388,7 +484,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     {
         if (track->mute.load (std::memory_order_relaxed))
             continue;
-        if (anySolo && ! track->solo.load (std::memory_order_relaxed))
+        if (anySolo
+            && ! track->solo.load (std::memory_order_relaxed)
+            && ! track->soloOverride.load (std::memory_order_relaxed))
             continue;
 
         const juce::MidiBuffer* trackMidi = &emptyMidi;
@@ -404,6 +502,9 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         track->mixTo (masterBus, numSamples);
     }
 
+    if (gateEnabled.load (std::memory_order_relaxed))
+        applyGate (masterBus, numSamples);
+
     if (reverbEnabled.load (std::memory_order_relaxed))
     {
         auto block = juce::dsp::AudioBlock<float> (masterBus).getSubBlock (0, (size_t) numSamples);
@@ -413,31 +514,30 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     masterPlugins_.process (masterBus, emptyMidi);
 
-    if (limiterEnabled.load (std::memory_order_relaxed))
-    {
-        auto block = juce::dsp::AudioBlock<float> (masterBus).getSubBlock (0, (size_t) numSamples);
-        juce::dsp::ProcessContextReplacing<float> context (block);
-        limiter.process (context);
-    }
-
     const float masterG = masterGain.load (std::memory_order_relaxed);
     if (! juce::approximatelyEqual (masterG, 1.0f))
         masterBus.applyGain (0, numSamples, masterG);
 
-    // Cheap hard clip only when needed (tanh-every-sample was too heavy at 128-sample buffers).
-    const float preClipPeak = masterBus.getMagnitude (0, numSamples);
-    if (preClipPeak > 1.0f)
+    if (limiterEnabled.load (std::memory_order_relaxed))
     {
-        auto* left = masterBus.getWritePointer (0);
-        auto* right = masterBus.getWritePointer (1);
-        for (int i = 0; i < numSamples; ++i)
+        applyCeiling (masterBus, numSamples);
+    }
+    else
+    {
+        const float peak = masterBus.getMagnitude (0, numSamples);
+        if (peak > 1.0f)
         {
-            left[i] = juce::jlimit (-1.0f, 1.0f, left[i]);
-            right[i] = juce::jlimit (-1.0f, 1.0f, right[i]);
+            auto* left = masterBus.getWritePointer (0);
+            auto* right = masterBus.getWritePointer (1);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                left[i] = juce::jlimit (-1.0f, 1.0f, left[i]);
+                right[i] = juce::jlimit (-1.0f, 1.0f, right[i]);
+            }
         }
     }
 
-    const float magnitude = juce::jmin (1.0f, preClipPeak);
+    const float magnitude = juce::jmin (1.0f, masterBus.getMagnitude (0, numSamples));
     const float previous = masterPeak.load (std::memory_order_relaxed);
     masterPeak.store (juce::jmax (previous * 0.6f, magnitude), std::memory_order_relaxed);
 

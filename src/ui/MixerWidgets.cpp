@@ -111,3 +111,34 @@ void PluginChipBar::resized()
         r.removeFromTop (4);
     }
 }
+
+PluginChipList::PluginChipList()
+{
+    viewport.setViewedComponent (&chips, false);
+    viewport.setScrollBarsShown (true, false);
+    viewport.setScrollBarThickness (10);
+    addAndMakeVisible (viewport);
+
+    chips.onOpen = [this] (int i) { if (onOpen) onOpen (i); };
+    chips.onRemove = [this] (int i) { if (onRemove) onRemove (i); };
+    chips.onBypassChanged = [this] (int i, bool b) { if (onBypassChanged) onBypassChanged (i, b); };
+}
+
+void PluginChipList::setPlugins (const juce::StringArray& namesToUse, const juce::Array<bool>& activeFlags)
+{
+    chips.setPlugins (namesToUse, activeFlags);
+    layoutChips();
+}
+
+void PluginChipList::resized()
+{
+    viewport.setBounds (getLocalBounds());
+    layoutChips();
+}
+
+void PluginChipList::layoutChips()
+{
+    const int viewH = juce::jmax (1, viewport.getHeight());
+    const int barW = juce::jmax (1, viewport.getMaximumVisibleWidth());
+    chips.setSize (barW, juce::jmax (viewH, chips.getPreferredHeight()));
+}

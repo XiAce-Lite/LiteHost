@@ -6,15 +6,24 @@
 
 class MainComponent;
 
-class TrackStrip : public juce::Component
+class TrackStrip : public juce::Component,
+                   public juce::DragAndDropTarget
 {
 public:
-    static constexpr int stripWidth = 168;
+    static constexpr int stripWidth = 184;
+    static constexpr const char* dragType = "litehost-track";
 
     TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn);
 
     void paint (juce::Graphics& g) override;
     void resized() override;
+    void mouseDown (const juce::MouseEvent& e) override;
+    void mouseDrag (const juce::MouseEvent& e) override;
+    bool isInterestedInDragSource (const SourceDetails& details) override;
+    void itemDragEnter (const SourceDetails& details) override;
+    void itemDragMove (const SourceDetails& details) override;
+    void itemDragExit (const SourceDetails& details) override;
+    void itemDropped (const SourceDetails& details) override;
     void refreshInputs();
     void refreshPlugins();
     void setPeak (float value);
@@ -22,6 +31,8 @@ public:
     void syncFromTrack();
 
 private:
+    bool isTrackDragSource (const juce::Component* component) const noexcept;
+    void updateSoloButton();
     struct LearnClickListener : public juce::MouseListener
     {
         TrackStrip& strip;
@@ -33,11 +44,14 @@ private:
     TrackProcessor& track;
     LearnClickListener learnClicks { *this };
     juce::Label name, panLabel, trimLabel;
+    juce::Component dragGrip;
     juce::ComboBox input;
     juce::TextButton mute, solo, addFx, remove;
     juce::Slider gain, pan, trim;
-    PluginChipBar chips;
+    PluginChipList chips;
     LevelMeter meter;
+    bool dropBefore = false;
+    bool dropAfter = false;
 };
 
 class MasterStrip : public juce::Component
@@ -52,10 +66,18 @@ public:
     void setPeak (float value);
 
 private:
+    struct LearnClickListener : public juce::MouseListener
+    {
+        MasterStrip& strip;
+        explicit LearnClickListener (MasterStrip& s) : strip (s) {}
+        void mouseDown (const juce::MouseEvent& e) override;
+    };
+
     MainComponent& owner;
-    juce::Label title, reverbMixLabel, reverbSizeLabel, limitLabel, masterGainLabel;
-    juce::TextButton reverbToggle, limiterToggle, addFx;
-    juce::Slider reverbMix, reverbSize, limitCeiling, masterGain;
-    PluginChipBar chips;
+    LearnClickListener learnClicks { *this };
+    juce::Label title, reverbMixLabel, reverbSizeLabel, limitLabel, gateLabel, masterGainLabel;
+    juce::TextButton reverbToggle, limiterToggle, gateToggle, addFx;
+    juce::Slider reverbMix, reverbSize, limitCeiling, gateThreshold, masterGain;
+    PluginChipList chips;
     LevelMeter meter;
 };

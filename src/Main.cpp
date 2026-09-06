@@ -1,12 +1,15 @@
 #include <JuceHeader.h>
 #include "CrashLog.h"
 #include "ui/MainComponent.h"
+#include "ui/StartupSplash.h"
+#include "Utf8.h"
+#include "BinaryData.h"
 
 class LiteHostApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "LiteHost"; }
-    const juce::String getApplicationVersion() override { return "0.1.0"; }
+    const juce::String getApplicationVersion() override { return "0.1.1"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise (const juce::String& commandLine) override
@@ -46,12 +49,16 @@ public:
             }
         }
 
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), projectPath, testSyncRoom);
+        splash = std::make_unique<StartupSplashWindow>();
+        splash->setStatus (jp (u8"起動しています..."), 0.04);
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), projectPath, testSyncRoom, splash.get());
+        splash.reset();
     }
 
     void shutdown() override
     {
         CrashLog::write ("LiteHost shutdown");
+        splash.reset();
         mainWindow = nullptr;
     }
 
@@ -68,15 +75,20 @@ public:
     class MainWindow : public juce::DocumentWindow
     {
     public:
-        MainWindow (juce::String name, juce::String projectPath, bool testSyncRoom)
+        MainWindow (juce::String name, juce::String projectPath, bool testSyncRoom, StartupProgress* progress)
             : DocumentWindow (name, juce::Colour (0xff10131a), DocumentWindow::allButtons)
         {
             setUsingNativeTitleBar (true);
-            auto* content = new MainComponent (std::move (projectPath));
+            auto icon = juce::ImageFileFormat::loadFrom (BinaryData::icon_png, BinaryData::icon_pngSize);
+            if (icon.isValid())
+                setIcon (icon);
+
+            auto* content = new MainComponent (std::move (projectPath), progress);
             setContentOwned (content, true);
             setResizable (true, true);
             setResizeLimits (820, 560, 10000, 10000);
-            centreWithSize (980, 720);
+            if (! content->applySavedWindowState (*this))
+                centreWithSize (980, 720);
             setVisible (true);
 
             if (testSyncRoom)
@@ -90,6 +102,7 @@ public:
     };
 
 private:
+    std::unique_ptr<StartupSplashWindow> splash;
     std::unique_ptr<MainWindow> mainWindow;
 };
 

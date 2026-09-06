@@ -32,3 +32,23 @@ private:
     juce::OwnedArray<juce::TextButton> buttons;
     juce::OwnedArray<juce::TextButton> removeButtons;
 };
+
+/** Plugin chips with a vertical scrollbar when the list is taller than the slot. */
+class PluginChipList : public juce::Component
+{
+public:
+    PluginChipList();
+
+    std::function<void (int)> onOpen;
+    std::function<void (int)> onRemove;
+    std::function<void (int, bool)> onBypassChanged;
+
+    void setPlugins (const juce::StringArray& namesToUse, const juce::Array<bool>& activeFlags);
+    void resized() override;
+
+private:
+    void layoutChips();
+
+    juce::Viewport viewport;
+    PluginChipBar chips;
+};

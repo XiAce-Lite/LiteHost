@@ -105,6 +105,32 @@ void MidiLearnManager::clearAll()
     bindings.clear();
 }
 
+void MidiLearnManager::trackMoved (int fromIndex, int destIndex)
+{
+    if (fromIndex == destIndex)
+        return;
+
+    for (auto& binding : bindings)
+    {
+        if (binding.trackIndex < 0)
+            continue;
+
+        if (binding.trackIndex == fromIndex)
+        {
+            binding.trackIndex = destIndex;
+        }
+        else if (fromIndex < destIndex)
+        {
+            if (binding.trackIndex > fromIndex && binding.trackIndex <= destIndex)
+                --binding.trackIndex;
+        }
+        else if (binding.trackIndex >= destIndex && binding.trackIndex < fromIndex)
+        {
+            ++binding.trackIndex;
+        }
+    }
+}
+
 void MidiLearnManager::assignLearning (bool isController, int channel, int number)
 {
     if (! learning || listener == nullptr)
@@ -124,10 +150,102 @@ void MidiLearnManager::assignLearning (bool isController, int channel, int numbe
     listener->midiLearnFinished (true);
 }
 
+namespace
+{
+    float controllerNorm (const juce::MidiMessage& message)
+    {
+        return (float) message.getControllerValue() / 127.0f;
+    }
+
+    bool applyToggleMessage (const juce::MidiMessage& message, bool current)
+    {
+        if (message.isNoteOn() && message.getVelocity() > 0)
+            return ! current;
+
+        if (message.isController())
+            return message.getControllerValue() >= 64;
+
+        return current;
+    }
+
+    bool isToggleMessage (const juce::MidiMessage& message)
+    {
+        return (message.isNoteOn() && message.getVelocity() > 0) || message.isController();
+    }
+}
+
 void MidiLearnManager::applyBinding (const MidiLearnBinding& binding, const juce::MidiMessage& message)
 {
     if (listener == nullptr)
         return;
+
+    if (midiLearnTargetIsMaster (binding.target))
+    {
+        switch (binding.target)
+        {
+            case MidiLearnTarget::masterGain:
+            {
+                if (! message.isController())
+                    return;
+                const float db = -60.0f + controllerNorm (message) * 72.0f;
+                listener->setMasterGain (juce::Decibels::decibelsToGain (db, -60.0f));
+                break;
+            }
+            case MidiLearnTarget::reverbEnabled:
+            {
+                if (! isToggleMessage (message))
+                    return;
+                listener->setReverbEnabled (applyToggleMessage (message, listener->getReverbEnabled()));
+                break;
+            }
+            case MidiLearnTarget::reverbMix:
+            {
+                if (! message.isController())
+                    return;
+                listener->setReverbMix (controllerNorm (message));
+                break;
+            }
+            case MidiLearnTarget::reverbSize:
+            {
+                if (! message.isController())
+                    return;
+                listener->setReverbSize (controllerNorm (message));
+                break;
+            }
+            case MidiLearnTarget::limiterEnabled:
+            {
+                if (! isToggleMessage (message))
+                    return;
+                listener->setLimiterEnabled (applyToggleMessage (message, listener->getLimiterEnabled()));
+                break;
+            }
+            case MidiLearnTarget::limiterCeiling:
+            {
+                if (! message.isController())
+                    return;
+                listener->setLimiterCeilingDb (-12.0f + controllerNorm (message) * 12.0f);
+                break;
+            }
+            case MidiLearnTarget::gateEnabled:
+            {
+                if (! isToggleMessage (message))
+                    return;
+                listener->setGateEnabled (applyToggleMessage (message, listener->getGateEnabled()));
+                break;
+            }
+            case MidiLearnTarget::gateThreshold:
+            {
+                if (! message.isController())
+                    return;
+                listener->setGateThresholdDb (-80.0f + controllerNorm (message) * 56.0f);
+                break;
+            }
+            default:
+                break;
+        }
+        return;
+    }
+
     if (binding.trackIndex < 0 || binding.trackIndex >= listener->getNumTracks())
         return;
 
@@ -138,7 +256,7 @@ void MidiLearnManager::applyBinding (const MidiLearnBinding& binding, const juce
         {
             if (! message.isController())
                 return;
-            const float norm = (float) message.getControllerValue() / 127.0f;
+            const float norm = controllerNorm (message);
             if (binding.target == MidiLearnTarget::trim)
             {
                 const float db = -24.0f + norm * 48.0f; // -24 .. +24
@@ -155,7 +273,7 @@ void MidiLearnManager::applyBinding (const MidiLearnBinding& binding, const juce
         {
             if (! message.isController())
                 return;
-            const float pan = ((float) message.getControllerValue() / 127.0f) * 2.0f - 1.0f;
+            const float pan = controllerNorm (message) * 2.0f - 1.0f;
             listener->setTrackPan (binding.trackIndex, pan);
             break;
         }
@@ -173,6 +291,8 @@ void MidiLearnManager::applyBinding (const MidiLearnBinding& binding, const juce
             listener->setTrackSolo (binding.trackIndex, ! listener->getTrackSolo (binding.trackIndex));
             break;
         }
+        default:
+            break;
     }
 }
 

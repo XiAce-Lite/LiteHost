@@ -56,6 +56,8 @@ public:
     std::atomic<float> pan { 0.0f };
     std::atomic<bool> mute { false };
     std::atomic<bool> solo { false };
+    /** Shift+solo: stay audible when other tracks are soloed. Mute still wins. */
+    std::atomic<bool> soloOverride { false };
     std::atomic<float> peak { 0.0f };
 
     PluginChain plugins;
@@ -94,8 +96,12 @@ public:
 
     TrackProcessor* addTrack (juce::String name);
     void removeTrack (const juce::Uuid& id);
+    /** Move track at fromIndex to destIndex (after the source has been removed). Caller holds the callback lock. */
+    bool moveTrack (int fromIndex, int destIndex);
     void clearTracksAndMaster();
     TrackProcessor* findTrack (const juce::Uuid& id) const;
+    bool hasSoloOverride() const noexcept;
+    void setTrackSolo (TrackProcessor& track, bool shouldSolo);
     const std::vector<std::unique_ptr<TrackProcessor>>& tracks() const noexcept { return tracks_; }
     const juce::CriticalSection& getCallbackLock() const noexcept { return callbackLock; }
     HostPlayHead& getPlayHead() noexcept { return playHead; }
@@ -105,14 +111,18 @@ public:
 
     std::atomic<bool> reverbEnabled { false };
     std::atomic<bool> limiterEnabled { false };
+    std::atomic<bool> gateEnabled { false };
     std::atomic<float> reverbRoom { 0.42f };
     std::atomic<float> reverbDamping { 0.4f };
     std::atomic<float> reverbWet { 0.18f };
     std::atomic<float> reverbWidth { 1.0f };
     std::atomic<float> limiterThresholdDb { -0.3f };
-    std::atomic<float> limiterReleaseMs { 80.0f };
+    /** Noise gate open threshold. Kept modest so Max cannot mute a normal performance. */
+    std::atomic<float> gateThresholdDb { -52.0f };
     std::atomic<float> masterGain { 1.0f };
     std::atomic<float> masterPeak { 0.0f };
+    /** Cakewalk Exclusive Solo: next solo click unsilos other tracks. Override is kept. */
+    std::atomic<bool> exclusiveSoloMode { false };
 
     double getSampleRate() const noexcept { return sampleRate; }
     int getBlockSize() const noexcept { return blockSize; }
@@ -131,6 +141,8 @@ private:
 
     void prepareGraph();
     void updateBuiltInParameters() noexcept;
+    void applyCeiling (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
+    void applyGate (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void copyToOutputs (float* const* outputs, int numOutputChannels, int numSamples) noexcept;
     void drainPendingMidi (int numSamples) noexcept;
     const juce::MidiBuffer* findDeviceMidi (const juce::String& deviceId) const noexcept;
@@ -140,7 +152,6 @@ private:
     PluginChain masterPlugins_;
     juce::AudioBuffer<float> masterBus;
     juce::dsp::Reverb reverb;
-    juce::dsp::Limiter<float> limiter;
     juce::dsp::ProcessSpec spec {};
     juce::CriticalSection callbackLock;
     juce::CriticalSection midiLock;
@@ -158,9 +169,10 @@ private:
     float appliedReverbDamping = -1.0f;
     float appliedReverbWet = -1.0f;
     float appliedReverbWidth = -1.0f;
-    float appliedLimiterThreshold = 1.0e6f;
-    float appliedLimiterRelease = -1.0f;
     double sampleRate = 48000.0;
     int blockSize = 512;
     bool running = false;
+    float gateEnv = 0.0f;
+    float gateGain = 1.0f;
+    bool gateOpen = true;
 };

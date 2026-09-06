@@ -27,4 +27,14 @@ $exe = Join-Path $buildDir "LiteHost_artefacts\$config\LiteHost.exe"
 if (-not (Test-Path $exe)) {
     $exe = Join-Path $buildDir "LiteHost_artefacts\LiteHost.exe"
 }
+if (-not (Test-Path $exe)) {
+    throw "ビルド成果物が見つかりません。Defender が隔離／削除した可能性があります。管理者で .\scripts\add-defender-exclusion.ps1 を実行してから再ビルドしてください。"
+}
+
+# Defender は書き込み直後に消すことがある
+Start-Sleep -Seconds 2
+if (-not (Test-Path $exe)) {
+    throw "LiteHost.exe がビルド直後に消えました（Defender の誤検知が多いです）。管理者で .\scripts\add-defender-exclusion.ps1 を実行してから再ビルドしてください。"
+}
+
 Write-Host "OK: $exe"

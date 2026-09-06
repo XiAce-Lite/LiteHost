@@ -52,10 +52,13 @@ private:
         int numIns = 2;
         int numOuts = 2;
         bool bypassed = false;
+        /** True after releaseResources(); prepare() must call prepareToPlay again. */
+        bool needsPrepare = false;
     };
 
     void processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& incomingMidi) noexcept;
     void refreshSlotChannels (Slot& slot) noexcept;
+    static bool shouldKeepPrepared (const juce::AudioPluginInstance& plugin) noexcept;
 
     std::vector<Slot> slots;
     juce::AudioBuffer<float> scratch;
