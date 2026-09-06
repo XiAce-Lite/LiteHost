@@ -59,7 +59,9 @@ Xcode と CMake が必要です。
 ./scripts/build-mac.sh
 ```
 
-成功すると `build/LiteHost_artefacts/Release/LiteHost.app` ができます。配布するときは署名と公証が別途必要です。AU はまだホストしていません（VST3 のみ。Windows と同じ）。
+成功すると `build/LiteHost_artefacts/Release/LiteHost.app` ができます。AU はまだホストしていません（VST3 のみ。Windows と同じ）。
+
+`master` への push と GitHub Release の公開時に、Actions が Apple Silicon 向け `LiteHost-*-macos-arm64.zip` を作り、同じバージョンのリリース（`vX.Y.Z`）へ添付します。未署名なので Gatekeeper が初回起動を止めることがあります。署名と公証は別途必要です。
 
 Windows ではデバイスタイプに **ASIO** が出ます（JUCE 同梱の ASIO ヘッダを使用。配布物は Steinberg ASIO SDK のライセンスに従う必要があります）。独自 SDK を使う場合は `third_party\asiosdk` に置き、CMake の `JUCE_ASIO_USE_EXTERNAL_SDK` を有効化してください。
 

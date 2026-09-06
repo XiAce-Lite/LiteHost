@@ -4,15 +4,80 @@ on:
   push:
     branches: [master]
   pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "添付先リリースのタグ（空なら CMake の VERSION から vX.Y.Z）"
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Configure
         run: cmake -B build -S . -G Xcode
+
       - name: Build
         run: cmake --build build --config Release
-      - name: Check app bundle
-        run: test -d build/LiteHost_artefacts/Release/LiteHost.app
+
+      - name: Package zip
+        id: pkg
+        run: |
+          set -euo pipefail
+          APP="build/LiteHost_artefacts/Release/LiteHost.app"
+          test -d "$APP"
+          VERSION="$(sed -n 's/^project(LiteHost VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt | head -1)"
+          test -n "$VERSION"
+          STAGE="$(mktemp -d)"
+          ditto "$APP" "$STAGE/LiteHost.app"
+          cp LICENSE README.md "$STAGE/"
+          mkdir -p dist
+          ZIP="$GITHUB_WORKSPACE/dist/LiteHost-${VERSION}-macos-arm64.zip"
+          (
+            cd "$STAGE"
+            zip -r -y "$ZIP" LiteHost.app LICENSE README.md
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "asset=$(basename "$ZIP")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LiteHost-macos-arm64
+          path: dist/LiteHost-*-macos-arm64.zip
+          if-no-files-found: error
+
+      - name: Attach zip to GitHub Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+          ZIP: ${{ steps.pkg.outputs.zip }}
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "release" ] && [ -n "${RELEASE_TAG:-}" ]; then
+            TAG="$RELEASE_TAG"
+          elif [ -n "${INPUT_TAG:-}" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="v${VERSION}"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+            echo "Uploaded $(basename "$ZIP") to $TAG"
+          else
+            echo "Release $TAG がまだ無いので添付をスキップしました。Windows zip で同タグのリリースを作ると、release イベントで再ビルドして添付します。"
+          fi
