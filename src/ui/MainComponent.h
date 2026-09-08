@@ -28,6 +28,7 @@ public:
 
     void paint (juce::Graphics&) override;
     void resized() override;
+    bool keyPressed (const juce::KeyPress& key) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void timerCallback() override;
 
@@ -49,8 +50,11 @@ public:
     void syncTrackMidiInputs();
     void beginTrackDrag (TrackStrip& strip);
     void beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source);
+    void beginMasterPluginDrag (int pluginIndex, juce::Component& source);
+    /** Move a plugin to toTrackId at insertIndex (0 = first). Same-track reorder is supported. */
     void transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
-                         const juce::Uuid& toTrackId, bool copy);
+                         const juce::Uuid& toTrackId, int insertIndex);
+    void reorderMasterPlugin (int pluginIndex, int insertIndex);
     void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter);
     void applySoloClick (const juce::Uuid& trackId, bool shift);
     bool applySavedWindowState (juce::ResizableWindow& window);
@@ -68,6 +72,11 @@ public:
     void controlSurfaceBankChanged (int bankOffset) override;
     void midiLearnFinished (bool assigned) override;
     void mixerUiChanged() override;
+    void projectEdited() override;
+    void markProjectDirty();
+    void clearProjectDirty();
+    /** If dirty, ask Save / Discard / Cancel. Calls proceed only for Save(success) or Discard. */
+    void promptIfProjectDirty (std::function<void()> proceed);
 
 private:
     enum MenuIds
@@ -115,6 +124,7 @@ private:
     void openProject();
     void saveProject();
     void saveProjectAs();
+    void saveProjectAsThen (std::function<void()> afterSave);
     void openRecentProject (int index);
     void clearProjectState();
     void ensureDefaultTrack();
@@ -139,6 +149,7 @@ private:
 
     StartupProgress* startupProgress = nullptr;
     LiteLookAndFeel lookAndFeel;
+    juce::TooltipWindow tooltipWindow { this, 450 };
     juce::AudioDeviceManager deviceManager;
     juce::AudioPluginFormatManager formatManager;
     juce::KnownPluginList knownPlugins;
@@ -150,6 +161,9 @@ private:
     bool audioEngineRunning = true;
     bool scanInProgress = false;
     bool quitConfirmOpen = false;
+    bool quitConfirmed = false;
+    bool projectDirty = false;
+    bool suppressProjectDirty = false;
 
     juce::MenuBarComponent menuBar;
     juce::Label title;

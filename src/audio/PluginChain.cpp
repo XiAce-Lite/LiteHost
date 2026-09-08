@@ -216,6 +216,9 @@ void PluginChain::processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, con
 
 void PluginChain::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& incomingMidi) noexcept
 {
+    if (chainBypassed.load (std::memory_order_relaxed))
+        return;
+
     for (auto& slot : slots)
         processSlot (slot, buffer, incomingMidi);
 }
@@ -271,6 +274,27 @@ juce::AudioPluginInstance* PluginChain::insertPrepared (int index,
     index = juce::jlimit (0, (int) slots.size(), index);
     slots.insert (slots.begin() + index, std::move (slot));
     return raw;
+}
+
+bool PluginChain::move (int fromIndex, int insertIndex)
+{
+    const int n = (int) slots.size();
+    if (! juce::isPositiveAndBelow (fromIndex, n))
+        return false;
+
+    insertIndex = juce::jlimit (0, n, insertIndex);
+    if (insertIndex == fromIndex || insertIndex == fromIndex + 1)
+        return false;
+
+    bool bypassed = false;
+    auto plugin = take (fromIndex, bypassed);
+    if (plugin == nullptr)
+        return false;
+
+    if (fromIndex < insertIndex)
+        --insertIndex;
+
+    return insertPrepared (insertIndex, std::move (plugin), bypassed) != nullptr;
 }
 
 void PluginChain::remove (int index)

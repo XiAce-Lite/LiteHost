@@ -15,8 +15,6 @@ public:
     juce::String windowState;
     juce::String skippedReleaseTag;
     bool setupWizardCompleted = false;
-    /** When true, quitting asks OK/Cancel (Cancel is the default button). */
-    bool confirmQuit = true;
 
     void load (AudioEngine& engine,
                ControlSurfaceManager& surface,

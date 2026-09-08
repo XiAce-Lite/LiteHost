@@ -17,6 +17,7 @@ public:
         virtual void controlSurfaceBankChanged (int bankOffset) = 0;
         virtual void midiLearnFinished (bool assigned) = 0;
         virtual void mixerUiChanged() = 0;
+        virtual void projectEdited() = 0;
     };
 
     MixerSession (AudioEngine& engineToUse, Host& hostToUse);

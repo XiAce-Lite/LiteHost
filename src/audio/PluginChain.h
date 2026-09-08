@@ -17,6 +17,9 @@ public:
 
     bool canAdd() const noexcept { return size() < maxPlugins; }
 
+    void setChainBypassed (bool shouldBypass) noexcept { chainBypassed.store (shouldBypass, std::memory_order_relaxed); }
+    bool isChainBypassed() const noexcept { return chainBypassed.load (std::memory_order_relaxed); }
+
     /** Configure + prepare on the message thread before addPrepared(). */
     static bool prepareInstance (juce::AudioPluginInstance& plugin,
                                  double sampleRate,
@@ -34,6 +37,9 @@ public:
     juce::AudioPluginInstance* insertPrepared (int index,
                                                std::unique_ptr<juce::AudioPluginInstance> plugin,
                                                bool bypassed);
+
+    /** Move slot from fromIndex to insertIndex (0 = before first, size = after last). */
+    bool move (int fromIndex, int insertIndex);
 
     void remove (int index);
     void clear();
@@ -102,4 +108,5 @@ private:
     double sampleRate = 48000.0;
     int blockSize = 512;
     bool prepared = false;
+    std::atomic<bool> chainBypassed { false };
 };

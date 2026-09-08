@@ -27,6 +27,7 @@ int MixerSession::indexOfTrack (const TrackProcessor& track) const
 
 void MixerSession::notifyUiIfNeeded (bool notifyUi)
 {
+    host.projectEdited();
     if (notifyUi)
         host.mixerUiChanged();
 }
@@ -40,6 +41,7 @@ void MixerSession::applySoloClick (const juce::Uuid& trackId, bool shift)
             track->soloOverride = ! track->soloOverride.load();
         else
             engine.setTrackSolo (*track, ! track->solo.load());
+        host.projectEdited();
     }
 }
 

@@ -2,6 +2,8 @@
 #include "MainComponent.h"
 #include "LookAndFeel.h"
 #include "Utf8.h"
+#include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -38,6 +40,74 @@ namespace
         slider.setSkewFactorFromMidPoint (0.0);
         slider.setTextValueSuffix (" dB");
         slider.setDoubleClickReturnValue (true, 0.0);
+        slider.setWantsKeyboardFocus (false);
+    }
+
+    bool isMixerTabStop (juce::Component& c)
+    {
+        if (! c.isVisible() || ! c.isEnabled() || c.getWidth() <= 0 || c.getHeight() <= 0)
+            return false;
+
+        if (dynamic_cast<juce::Button*> (&c) != nullptr
+            || dynamic_cast<juce::ComboBox*> (&c) != nullptr
+            || dynamic_cast<juce::ListBox*> (&c) != nullptr)
+            return c.getWantsKeyboardFocus();
+
+        if (auto* label = dynamic_cast<juce::Label*> (&c))
+        {
+            if (dynamic_cast<juce::Slider*> (label->getParentComponent()) != nullptr)
+                return true;
+            return label->isEditable() && label->getWantsKeyboardFocus();
+        }
+
+        return false;
+    }
+
+    void collectMixerTabStops (juce::Component& root, juce::Array<juce::Component*>& out)
+    {
+        for (int i = 0; i < root.getNumChildComponents(); ++i)
+        {
+            auto* c = root.getChildComponent (i);
+            if (c == nullptr || ! c->isVisible() || ! c->isEnabled())
+                continue;
+
+            if (isMixerTabStop (*c))
+                out.add (c);
+
+            collectMixerTabStops (*c, out);
+        }
+    }
+
+    void assignFocusOrder (juce::Component& c, int& order)
+    {
+        c.setWantsKeyboardFocus (true);
+        c.setExplicitFocusOrder (order++);
+    }
+
+    /** JUCE sorts focus by sibling explicitFocusOrder (not nested leaves). Put the order on the Slider. */
+    void prepareSliderTextBox (juce::Slider& slider)
+    {
+        slider.setWantsKeyboardFocus (false);
+
+        for (int i = 0; i < slider.getNumChildComponents(); ++i)
+        {
+            if (auto* label = dynamic_cast<juce::Label*> (slider.getChildComponent (i)))
+            {
+                if (label->isEditableOnSingleClick()
+                    || (label->isEditable() && ! label->isEditableOnDoubleClick()))
+                    label->setEditable (false, true, true);
+
+                label->setWantsKeyboardFocus (true);
+                label->setFocusContainerType (juce::Component::FocusContainerType::none);
+                return;
+            }
+        }
+    }
+
+    void assignSliderFocusOrder (juce::Slider& slider, int& order)
+    {
+        slider.setExplicitFocusOrder (order++);
+        prepareSliderTextBox (slider);
     }
 
     int midiComboId (int deviceIndex)
@@ -55,6 +125,9 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     : owner (ownerIn),
       track (trackIn)
 {
+    // Keep Tab cycling inside the strip so other tracks / master cannot interleave.
+    setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
+
     name.setText (track.name, juce::dontSendNotification);
     name.setFont (LiteLookAndFeel::uiFont (14.0f));
     name.setJustificationType (juce::Justification::centred);
@@ -73,6 +146,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
             return;
         }
         track.name = text;
+        owner.markProjectDirty();
     };
     addAndMakeVisible (name);
 
@@ -108,6 +182,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
                 track.midiDeviceId = midiId;
             }
             owner.syncTrackMidiInputs();
+            owner.markProjectDirty();
             return;
         }
 
@@ -119,6 +194,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
             track.inputCount = count;
             track.midiDeviceId.clear();
         }
+        owner.markProjectDirty();
     };
     addAndMakeVisible (input);
 
@@ -141,6 +217,14 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     addAndMakeVisible (solo);
     updateSoloButton();
 
+    vstToggle.setToggleState (! track.plugins.isChainBypassed(), juce::dontSendNotification);
+    vstToggle.onClick = [this] {
+        track.plugins.setChainBypassed (! vstToggle.getToggleState());
+        chips.setChainBypassed (track.plugins.isChainBypassed());
+        owner.markProjectDirty();
+    };
+    addAndMakeVisible (vstToggle);
+
     configureChannelFader (gain);
     gain.setValue ((double) juce::Decibels::gainToDecibels (track.gain.load(), -60.0f), juce::dontSendNotification);
     gain.onValueChange = [this] {
@@ -149,7 +233,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     gain.addMouseListener (&learnClicks, false);
     addAndMakeVisible (gain);
 
-    trimLabel.setText ("Trim", juce::dontSendNotification);
+    trimLabel.setText ("Gain", juce::dontSendNotification);
     trimLabel.setJustificationType (juce::Justification::centred);
     trimLabel.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
     trimLabel.addMouseListener (this, false);
@@ -160,7 +244,8 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     trim.setRange (-24.0, 24.0, 0.1);
     trim.setValue ((double) juce::Decibels::gainToDecibels (track.trim.load(), -24.0f), juce::dontSendNotification);
     trim.setTextValueSuffix (" dB");
-    trim.setDoubleClickReturnValue (true, 0.0);
+        trim.setDoubleClickReturnValue (true, 0.0);
+    trim.setWantsKeyboardFocus (false);
     trim.onValueChange = [this] {
         owner.getMixer().setTrackTrim (track, juce::Decibels::decibelsToGain ((float) trim.getValue(), -24.0f));
     };
@@ -178,6 +263,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     pan.setRange (-1.0, 1.0, 0.01);
     pan.setValue ((double) track.pan.load(), juce::dontSendNotification);
     pan.setDoubleClickReturnValue (true, 0.0);
+    pan.setWantsKeyboardFocus (false);
     pan.textFromValueFunction = [] (double v) {
         if (std::abs (v) < 0.01)
             return juce::String ("C");
@@ -204,7 +290,7 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     addFx.onClick = [this] { owner.promptAddPlugin (track.id, false); };
     addAndMakeVisible (addFx);
 
-    remove.setButtonText (jp (u8"削除"));
+    remove.setButtonText (jp (u8"Tr削除"));
     remove.onClick = [this] { owner.removeTrack (track.id); };
     addAndMakeVisible (remove);
 
@@ -215,11 +301,25 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     chips.onRemove = [this] (int index) { owner.removePluginFromTrack (track.id, index); };
     chips.onBypassChanged = [this] (int index, bool bypassed) {
         track.plugins.setBypassed (index, bypassed);
+        owner.markProjectDirty();
     };
     chips.onDragStart = [this] (int index, juce::Component& source) -> bool {
         owner.beginPluginDrag (track.id, index, source);
         return true;
     };
+    chips.onPluginDrop = [this] (int insertIndex, const juce::var& description) {
+        const auto desc = description.toString();
+        const auto pluginPrefix = juce::String (pluginDragType) + ":";
+        if (! desc.startsWith (pluginPrefix))
+            return;
+
+        const auto body = desc.fromFirstOccurrenceOf (":", false, false);
+        const auto trackToken = body.upToFirstOccurrenceOf (":", false, false);
+        const auto indexToken = body.fromFirstOccurrenceOf (":", false, false);
+        owner.transferPlugin (juce::Uuid (trackToken), indexToken.getIntValue(),
+                              track.id, insertIndex);
+    };
+    chips.setChipHelpText (jp (u8"クリック: オン/オフ  ダブルクリック: エディタ\nドラッグ: 並べ替え / 他トラックへ移動"));
     addAndMakeVisible (chips);
     addAndMakeVisible (meter);
 
@@ -337,9 +437,9 @@ void TrackStrip::itemDropped (const SourceDetails& details)
         const auto body = desc.fromFirstOccurrenceOf (":", false, false);
         const auto trackToken = body.upToFirstOccurrenceOf (":", false, false);
         const auto indexToken = body.fromFirstOccurrenceOf (":", false, false);
-        const bool copy = juce::ModifierKeys::getCurrentModifiers().isCommandDown()
-                       || juce::ModifierKeys::getCurrentModifiers().isCtrlDown();
-        owner.transferPlugin (juce::Uuid (trackToken), indexToken.getIntValue(), track.id, copy);
+        // Dropped on the strip body (not the chip list) → append.
+        owner.transferPlugin (juce::Uuid (trackToken), indexToken.getIntValue(),
+                              track.id, track.plugins.size());
         return;
     }
 
@@ -363,17 +463,17 @@ void TrackStrip::resized()
     r.removeFromTop (6);
 
     auto ms = r.removeFromTop (28);
-    mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2).reduced (2, 0));
-    solo.setBounds (ms.reduced (2, 0));
+    mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2).reduced (1, 0));
+    solo.setBounds (ms.reduced (1, 0));
     r.removeFromTop (4);
 
-    auto trimRow = r.removeFromTop (64);
-    trimLabel.setBounds (trimRow.removeFromTop (14));
-    trim.setBounds (trimRow);
-
-    auto panRow = r.removeFromTop (64);
-    panLabel.setBounds (panRow.removeFromTop (14));
-    pan.setBounds (panRow);
+    auto knobRow = r.removeFromTop (72);
+    auto gainCol = knobRow.removeFromLeft (knobRow.getWidth() / 2).reduced (2, 0);
+    auto panCol = knobRow.reduced (2, 0);
+    trimLabel.setBounds (gainCol.removeFromTop (14));
+    trim.setBounds (gainCol);
+    panLabel.setBounds (panCol.removeFromTop (14));
+    pan.setBounds (panCol);
     r.removeFromTop (4);
 
     auto meterRow = r.removeFromTop (168);
@@ -381,11 +481,38 @@ void TrackStrip::resized()
     gain.setBounds (meterRow);
 
     r.removeFromTop (6);
-    remove.setBounds (r.removeFromBottom (28));
-    r.removeFromBottom (4);
-    addFx.setBounds (r.removeFromBottom (28));
+    auto bottom = r.removeFromBottom (28);
+    addFx.setBounds (bottom.removeFromLeft (bottom.getWidth() / 2).reduced (2, 0));
+    remove.setBounds (bottom.reduced (2, 0));
     r.removeFromBottom (6);
+
+    auto power = r.removeFromLeft (28);
+    vstToggle.setBounds (power.removeFromTop (28).reduced (1));
+    r.removeFromLeft (4);
     chips.setBounds (r);
+
+    if (! getProperties()["sliderValueBoxesReady"])
+    {
+        sendLookAndFeelChange();
+        getProperties().set ("sliderValueBoxesReady", true);
+    }
+
+    // Logical Tab order (sibling focus order), not screen Y/X:
+    // Name → Input → Mute → Solo → Gain → Pan → Fader → VST all-off
+    // → each VST / delete → +VST → Tr delete
+    int order = 1;
+    name.setFocusContainerType (juce::Component::FocusContainerType::none);
+    assignFocusOrder (name, order);
+    assignFocusOrder (input, order);
+    assignFocusOrder (mute, order);
+    assignFocusOrder (solo, order);
+    assignSliderFocusOrder (trim, order);
+    assignSliderFocusOrder (pan, order);
+    assignSliderFocusOrder (gain, order);
+    assignFocusOrder (vstToggle, order);
+    chips.setExplicitFocusOrder (order++);
+    assignFocusOrder (addFx, order);
+    assignFocusOrder (remove, order);
 }
 
 void TrackStrip::refreshInputs()
@@ -460,6 +587,7 @@ void TrackStrip::refreshPlugins()
         active.add (! track.plugins.isBypassed (i));
     }
     chips.setPlugins (names, active);
+    chips.setChainBypassed (track.plugins.isChainBypassed());
     addFx.setEnabled (track.plugins.canAdd());
 }
 
@@ -493,6 +621,8 @@ void TrackStrip::syncFromTrack()
 {
     mute.setToggleState (track.mute.load(), juce::dontSendNotification);
     updateSoloButton();
+    vstToggle.setToggleState (! track.plugins.isChainBypassed(), juce::dontSendNotification);
+    chips.setChainBypassed (track.plugins.isChainBypassed());
     gain.setValue ((double) juce::Decibels::gainToDecibels (track.gain.load(), -60.0f),
                    juce::dontSendNotification);
     trim.setValue ((double) juce::Decibels::gainToDecibels (track.trim.load(), -24.0f),
@@ -526,6 +656,9 @@ void TrackStrip::LearnClickListener::mouseDown (const juce::MouseEvent& e)
 MasterStrip::MasterStrip (MainComponent& ownerIn)
     : owner (ownerIn)
 {
+    // Keep Tab cycling inside master so track-strip focus orders cannot interleave.
+    setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
+
     title.setText (jp (u8"メインアウト"), juce::dontSendNotification);
     title.setFont (LiteLookAndFeel::uiFont (16.0f, juce::Font::bold));
     addAndMakeVisible (title);
@@ -558,6 +691,7 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
         slider.setRange (min, max, step);
         slider.setValue (value, juce::dontSendNotification);
         slider.setTextValueSuffix (suffix);
+        slider.setWantsKeyboardFocus (false);
     };
 
     setupSlider (reverbMix, 0.0, 1.0, 0.01, (double) owner.getEngine().reverbWet.load(), "");
@@ -615,7 +749,27 @@ MasterStrip::MasterStrip (MainComponent& ownerIn)
     chips.onRemove = [this] (int index) { owner.removePluginFromMaster (index); };
     chips.onBypassChanged = [this] (int index, bool bypassed) {
         owner.getEngine().masterPlugins().setBypassed (index, bypassed);
+        owner.markProjectDirty();
     };
+    chips.onDragStart = [this] (int index, juce::Component& source) -> bool {
+        owner.beginMasterPluginDrag (index, source);
+        return true;
+    };
+    chips.onPluginDrop = [this] (int insertIndex, const juce::var& description) {
+        const auto desc = description.toString();
+        const auto pluginPrefix = juce::String (TrackStrip::pluginDragType) + ":";
+        if (! desc.startsWith (pluginPrefix))
+            return;
+
+        const auto body = desc.fromFirstOccurrenceOf (":", false, false);
+        const auto sourceToken = body.upToFirstOccurrenceOf (":", false, false);
+        const auto indexToken = body.fromFirstOccurrenceOf (":", false, false);
+        if (sourceToken != "master")
+            return;
+
+        owner.reorderMasterPlugin (indexToken.getIntValue(), insertIndex);
+    };
+    chips.setChipHelpText (jp (u8"クリック: オン/オフ  ダブルクリック: エディタ\nドラッグ: 並べ替え"));
     addAndMakeVisible (chips);
     addAndMakeVisible (meter);
     refreshPlugins();
@@ -665,6 +819,36 @@ void MasterStrip::resized()
     gateToggle.setBounds (row3.removeFromLeft (104));
     gateLabel.setBounds (row3.removeFromLeft (58));
     gateThreshold.setBounds (row3.removeFromLeft (160));
+
+    if (! getProperties()["sliderValueBoxesReady"])
+    {
+        sendLookAndFeelChange();
+        getProperties().set ("sliderValueBoxesReady", true);
+    }
+
+    // Logical Tab order via sibling focus order (JUCE DFS), not screen Y/X:
+    // VST → Reverb/Mix/Size → Limiter/Ceiling → Gate/Threshold → Output
+    int order = 1;
+    chips.setExplicitFocusOrder (order++);
+    {
+        juce::Array<juce::Component*> vstStops;
+        collectMixerTabStops (chips, vstStops);
+        int chipOrder = 1;
+        for (auto* c : vstStops)
+        {
+            c->setWantsKeyboardFocus (true);
+            c->setExplicitFocusOrder (chipOrder++);
+        }
+    }
+    assignFocusOrder (addFx, order);
+    assignFocusOrder (reverbToggle, order);
+    assignSliderFocusOrder (reverbMix, order);
+    assignSliderFocusOrder (reverbSize, order);
+    assignFocusOrder (limiterToggle, order);
+    assignSliderFocusOrder (limitCeiling, order);
+    assignFocusOrder (gateToggle, order);
+    assignSliderFocusOrder (gateThreshold, order);
+    assignSliderFocusOrder (masterGain, order);
 }
 
 void MasterStrip::refreshPlugins()

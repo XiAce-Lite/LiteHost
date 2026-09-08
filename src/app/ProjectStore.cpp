@@ -85,6 +85,7 @@ bool ProjectStore::loadIntoEngine (const juce::XmlElement& root,
             track->solo = child->getBoolAttribute ("solo", false);
             track->soloOverride = child->getBoolAttribute ("soloOverride", false)
                                || child->getBoolAttribute ("exclusiveSolo", false);
+            track->plugins.setChainBypassed (child->getBoolAttribute ("pluginsBypassed", false));
             restoreChain (track->plugins, *child);
             ++trackSerial;
         }
@@ -125,6 +126,7 @@ bool ProjectStore::saveToFile (const juce::File& file, const AudioEngine& engine
         child->setAttribute ("mute", track->mute.load());
         child->setAttribute ("solo", track->solo.load());
         child->setAttribute ("soloOverride", track->soloOverride.load());
+        child->setAttribute ("pluginsBypassed", track->plugins.isChainBypassed() ? 1 : 0);
         track->plugins.writeXml (*child);
     }
 

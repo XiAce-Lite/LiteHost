@@ -43,14 +43,13 @@ public:
     std::function<void()> onOk;
     std::function<void()> onClose;
 
-    OptionsGeneralPanel (bool exclusiveSolo, bool confirmQuit);
+    explicit OptionsGeneralPanel (bool exclusiveSolo);
     void resized() override;
 
     bool getExclusiveSolo() const { return exclusiveSoloToggle.getToggleState(); }
-    bool getConfirmQuit() const { return confirmQuitToggle.getToggleState(); }
 
 private:
-    juce::Label title, exclusiveHint, quitHint;
-    juce::ToggleButton exclusiveSoloToggle, confirmQuitToggle;
+    juce::Label title, exclusiveHint;
+    juce::ToggleButton exclusiveSoloToggle;
     juce::TextButton ok, close;
 };

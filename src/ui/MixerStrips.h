@@ -48,6 +48,7 @@ private:
     juce::Component dragGrip;
     juce::ComboBox input;
     juce::TextButton mute, solo, addFx, remove;
+    ChainPowerButton vstToggle;
     juce::Slider gain, pan, trim;
     PluginChipList chips;
     LevelMeter meter;

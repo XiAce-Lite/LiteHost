@@ -170,7 +170,7 @@ void SetupWizardPanel::goTo (int newPage)
         case 0:
             stepTitle.setText (jp (u8"LiteHost へようこそ"), juce::dontSendNotification);
             stepBody.setText (jp (u8"DAW ほど大げさではなく、入力を選んで VST を挿して鳴らすだけのホストです。\n"
-                                  u8"最初にオーディオ機器とプラグイン一覧を整えておきましょう（あとからいつでも変更できます）。"),
+                                  u8"最初にオーディオ機器とプラグイン一覧を整えておきましょう（あとからいつでも変更できます）"),
                               juce::dontSendNotification);
             break;
         case 1:
@@ -190,7 +190,7 @@ void SetupWizardPanel::goTo (int newPage)
             stepTitle.setText (jp (u8"VST3 フォルダ"), juce::dontSendNotification);
             stepBody.setText (PluginScanCoordinator::defaultFolderHint()
                                   + "\n"
-                                  + jp (u8"必要なフォルダを追加してからスキャンしてください。「次へ」だけ進むとスキャンはしません（あとからヘッダーの VST3 スキャンでも可）。"),
+                                  + jp (u8"必要なフォルダを追加してからスキャンしてください。「次へ」だけ進むとスキャンはしません（あとからヘッダーの VST3 スキャンでも可）"),
                               juce::dontSendNotification);
             break;
         case 3:
