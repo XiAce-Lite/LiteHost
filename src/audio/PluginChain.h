@@ -27,6 +27,14 @@ public:
     /** Insert an already-prepared instance. Does not call prepareToPlay. */
     juce::AudioPluginInstance* addPrepared (std::unique_ptr<juce::AudioPluginInstance> plugin);
 
+    /** Remove and return the instance without calling releaseResources(). */
+    std::unique_ptr<juce::AudioPluginInstance> take (int index, bool& bypassedOut);
+
+    /** Insert an already-prepared instance at index (clamped to size). */
+    juce::AudioPluginInstance* insertPrepared (int index,
+                                               std::unique_ptr<juce::AudioPluginInstance> plugin,
+                                               bool bypassed);
+
     void remove (int index);
     void clear();
     void setBypassed (int index, bool shouldBeBypassed);

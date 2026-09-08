@@ -96,6 +96,8 @@ public:
         setColour (juce::TextEditor::focusedOutlineColourId, juce::Colour (accent));
         setColour (juce::AlertWindow::backgroundColourId, juce::Colour (surface));
         setColour (juce::AlertWindow::textColourId, juce::Colour (text));
+        setColour (juce::AlertWindow::outlineColourId, juce::Colour (0xff3a4254));
+        setUsingNativeAlertWindows (false);
         setColour (juce::ScrollBar::thumbColourId, juce::Colour (0xff3a4254));
         setColour (juce::ToggleButton::textColourId, juce::Colour (text));
         setColour (juce::ToggleButton::tickColourId, juce::Colour (accent));

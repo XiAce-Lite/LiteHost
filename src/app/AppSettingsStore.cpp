@@ -14,6 +14,7 @@ void AppSettingsStore::load (AudioEngine& engine,
     windowState.clear();
     skippedReleaseTag.clear();
     setupWizardCompleted = false;
+    confirmQuit = true;
 
     auto xml = juce::XmlDocument::parse (AppPaths::settingsFile());
     if (xml == nullptr || xml->getTagName() != "SETTINGS")
@@ -21,6 +22,7 @@ void AppSettingsStore::load (AudioEngine& engine,
 
     // Existing installs without the flag are treated as already finished.
     setupWizardCompleted = xml->getBoolAttribute ("setupWizardCompleted", true);
+    confirmQuit = xml->getBoolAttribute ("confirmQuit", true);
     windowState = xml->getStringAttribute ("windowState");
     skippedReleaseTag = xml->getStringAttribute ("skippedReleaseTag");
     currentProject = juce::File (xml->getStringAttribute ("lastProject"));
@@ -51,6 +53,7 @@ void AppSettingsStore::save (const AudioEngine& engine,
     juce::XmlElement xml ("SETTINGS");
     xml.setAttribute ("lastProject", currentProject.getFullPathName());
     xml.setAttribute ("setupWizardCompleted", setupWizardCompleted ? 1 : 0);
+    xml.setAttribute ("confirmQuit", confirmQuit ? 1 : 0);
     xml.setAttribute ("windowState", windowState);
     xml.setAttribute ("skippedReleaseTag", skippedReleaseTag);
     xml.setAttribute ("exclusiveSoloMode", engine.exclusiveSoloMode.load() ? 1 : 0);

@@ -21,15 +21,38 @@ public:
     std::function<void (int)> onOpen;
     std::function<void (int)> onRemove;
     std::function<void (int, bool)> onBypassChanged;
+    /** Return true if a drag-and-drop operation was started. */
+    std::function<bool (int, juce::Component&)> onDragStart;
 
     void setPlugins (const juce::StringArray& namesToUse, const juce::Array<bool>& activeFlags);
-    void mouseDoubleClick (const juce::MouseEvent& e) override;
     int getPreferredHeight() const;
     void resized() override;
 
 private:
-    juce::StringArray names;
-    juce::OwnedArray<juce::TextButton> buttons;
+    class Chip final : public juce::Component,
+                       public juce::SettableTooltipClient
+    {
+    public:
+        Chip (PluginChipBar& ownerIn, int indexIn, juce::String nameIn, bool activeIn);
+
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseUp (const juce::MouseEvent& e) override;
+        void mouseDoubleClick (const juce::MouseEvent& e) override;
+
+        bool isActive() const noexcept { return active; }
+
+    private:
+        PluginChipBar& owner;
+        int index = 0;
+        juce::String name;
+        bool active = true;
+        bool dragStarted = false;
+        bool suppressClick = false;
+    };
+
+    juce::OwnedArray<Chip> chips;
     juce::OwnedArray<juce::TextButton> removeButtons;
 };
 
@@ -42,6 +65,8 @@ public:
     std::function<void (int)> onOpen;
     std::function<void (int)> onRemove;
     std::function<void (int, bool)> onBypassChanged;
+    /** Return true if a drag-and-drop operation was started. */
+    std::function<bool (int, juce::Component&)> onDragStart;
 
     void setPlugins (const juce::StringArray& namesToUse, const juce::Array<bool>& activeFlags);
     void resized() override;

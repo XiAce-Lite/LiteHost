@@ -36,7 +36,7 @@ public:
     void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
 
     void setScanStatus (const juce::String& text);
-    void scanFinished();
+    void scanFinished (int failedCount = 0);
 
     void promptAddPlugin (const juce::Uuid& trackId, bool master);
     void openPluginEditor (juce::AudioPluginInstance& plugin);
@@ -48,9 +48,15 @@ public:
     void showLearnMenuForTrack (int trackIndex, MidiLearnTarget target);
     void syncTrackMidiInputs();
     void beginTrackDrag (TrackStrip& strip);
+    void beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source);
+    void transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
+                         const juce::Uuid& toTrackId, bool copy);
     void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter);
     void applySoloClick (const juce::Uuid& trackId, bool shift);
     bool applySavedWindowState (juce::ResizableWindow& window);
+    /** Returns false if quit was cancelled or a confirm dialog is already open.
+        When confirmQuit is on, may return false immediately and call quit later via the app. */
+    bool requestQuit();
 
     juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
     AudioEngine& getEngine() noexcept { return engine; }
@@ -73,7 +79,12 @@ private:
         menuRecentBase = 100,
         menuRecentClear = 199,
         menuQuit = 200,
-        menuSetupWizard = 210
+        menuSetupWizard = 210,
+        menuAudioSettings = 300,
+        menuSurfaceSettings,
+        menuMidiLearnSettings,
+        menuVstScan,
+        menuOptionsGeneral
     };
 
     void setupAudio();
@@ -82,6 +93,7 @@ private:
     void showSetupWizard (bool allowStarterTrackAutoCreate = false);
     void showSurfaceSettings();
     void showMidiLearnSettings();
+    void showOptionsGeneral();
     void updateEngineButton();
     void showScanDialog();
     void markSetupWizardCompleted();
@@ -90,6 +102,7 @@ private:
     bool maybeAutoCreateStarterMonoTrack();
     void finishSetupWizardSession (bool allowStarterTrackAutoCreate);
     void startPluginScan (const juce::FileSearchPath& paths);
+    void pruneMissingPlugins();
     void saveAll();
     void savePluginList();
     void loadPluginList();
@@ -135,17 +148,14 @@ private:
     AppSettingsStore appSettings;
     MixerSession mixer;
     bool audioEngineRunning = true;
+    bool scanInProgress = false;
+    bool quitConfirmOpen = false;
 
     juce::MenuBarComponent menuBar;
     juce::Label title;
     juce::Label status;
-    juce::TextButton audioButton { jp (u8"オーディオ設定") };
     juce::TextButton engineButton { jp (u8"オーディオ停止") };
-    juce::TextButton surfaceButton { jp (u8"サーフェス") };
-    juce::TextButton learnButton { jp (u8"MIDI学習") };
-    juce::TextButton scanButton { jp (u8"VST3 スキャン") };
     juce::TextButton addTrackButton { jp (u8"トラック追加") };
-    juce::TextButton exclusiveSoloButton { jp (u8"排他ソロ") };
 
     juce::Viewport trackViewport;
     juce::Component trackList;

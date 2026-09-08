@@ -12,6 +12,7 @@ class TrackStrip : public juce::Component,
 public:
     static constexpr int stripWidth = 184;
     static constexpr const char* dragType = "litehost-track";
+    static constexpr const char* pluginDragType = "litehost-plugin";
 
     TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn);
 
@@ -52,6 +53,7 @@ private:
     LevelMeter meter;
     bool dropBefore = false;
     bool dropAfter = false;
+    bool pluginDropHighlight = false;
 };
 
 class MasterStrip : public juce::Component

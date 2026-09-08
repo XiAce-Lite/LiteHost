@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(LiteHost VERSION 0.1.1 LANGUAGES C CXX)
+project(LiteHost VERSION 0.1.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,7 +24,7 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(LiteHost
     PRODUCT_NAME "LiteHost"
-    VERSION "0.1.1"
+    VERSION "0.1.2"
     COMPANY_NAME "LiteHost"
     BUNDLE_ID com.litehost.app
     ICON_BIG "${CMAKE_SOURCE_DIR}/assets/icon.png"
@@ -56,6 +56,8 @@ target_sources(LiteHost PRIVATE
     src/app/ProjectStore.cpp
     src/app/PluginScanCoordinator.h
     src/app/PluginScanCoordinator.cpp
+    src/app/ScanUiSuppressor.h
+    src/app/ScanUiSuppressor.cpp
     src/session/MixerSession.h
     src/session/MixerSession.cpp
     src/audio/PluginChain.h
@@ -117,7 +119,7 @@ if(WIN32)
 endif()
 
 if(APPLE)
-    # Same product as Windows: VST3 only. AU can be enabled later without a fork.
+    # Same product as Windows: VST3 host only. AU can be enabled later without a fork.
     target_compile_definitions(LiteHost PRIVATE
         JUCE_PLUGINHOST_AU=0
         JUCE_COREAUDIO=1

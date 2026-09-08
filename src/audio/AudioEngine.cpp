@@ -180,6 +180,16 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
         const juce::ScopedLock midi (midiLock);
         pendingMidi.clear();
     }
+
+    // Soft-start: interface open / floating inputs often click for a few ms.
+    constexpr double fadeSeconds = 0.05;
+    outputFadeSamplesRemaining = juce::jmax (1, (int) std::lround (sampleRate * fadeSeconds));
+    masterBus.clear();
+    masterPeak = 0.0f;
+    gateEnv = 0.0f;
+    gateGain = 0.0f;
+    gateOpen = false;
+    reverb.reset();
     running = true;
 }
 
@@ -187,6 +197,7 @@ void AudioEngine::audioDeviceStopped()
 {
     const juce::ScopedLock sl (callbackLock);
     running = false;
+    outputFadeSamplesRemaining = 0;
     playHead.setPlaying (false);
 
     for (auto& track : tracks_)
@@ -444,6 +455,32 @@ void AudioEngine::copyToOutputs (float* const* outputs, int numOutputChannels, i
             juce::FloatVectorOperations::clear (outputs[channel], numSamples);
 }
 
+void AudioEngine::applyOutputFadeIn (int numSamples) noexcept
+{
+    if (outputFadeSamplesRemaining <= 0 || numSamples <= 0)
+        return;
+
+    const int fadeTotal = juce::jmax (1, (int) std::lround (sampleRate * 0.05));
+    const int remainingAtStart = outputFadeSamplesRemaining;
+    const int apply = juce::jmin (numSamples, remainingAtStart);
+
+    auto* left = masterBus.getWritePointer (0);
+    auto* right = masterBus.getNumChannels() > 1 ? masterBus.getWritePointer (1) : left;
+
+    for (int i = 0; i < apply; ++i)
+    {
+        const int elapsed = fadeTotal - remainingAtStart + i;
+        const float t = juce::jlimit (0.0f, 1.0f, (float) elapsed / (float) fadeTotal);
+        // Raised cosine: quieter start than a linear ramp against interface pops.
+        const float g = 0.5f - 0.5f * std::cos (t * juce::MathConstants<float>::pi);
+        left[i] *= g;
+        if (right != left)
+            right[i] *= g;
+    }
+
+    outputFadeSamplesRemaining = remainingAtStart - apply;
+}
+
 void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputChannelData,
                                                     int numInputChannels,
                                                     float* const* outputChannelData,
@@ -541,6 +578,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     const float previous = masterPeak.load (std::memory_order_relaxed);
     masterPeak.store (juce::jmax (previous * 0.6f, magnitude), std::memory_order_relaxed);
 
+    applyOutputFadeIn (numSamples);
     copyToOutputs (outputChannelData, numOutputChannels, numSamples);
     playHead.advance (numSamples);
 

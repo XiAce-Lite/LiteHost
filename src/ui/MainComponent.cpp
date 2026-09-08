@@ -13,7 +13,6 @@
 #include "app/ProjectStore.h"
 #include "audio/SyncRoomFinder.h"
 #include <cstdlib>
-#include <map>
 
 namespace
 {
@@ -65,20 +64,7 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
     addAndMakeVisible (status);
     status.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
 
-    audioButton.onClick = [this] { showAudioSettings(); };
     engineButton.onClick = [this] { setAudioEngineRunning (! audioEngineRunning); };
-    surfaceButton.onClick = [this] { showSurfaceSettings(); };
-    learnButton.onClick = [this] { showMidiLearnSettings(); };
-    scanButton.onClick = [this] { showScanDialog(); };
-    exclusiveSoloButton.setClickingTogglesState (true);
-    exclusiveSoloButton.setColour (juce::TextButton::buttonOnColourId, juce::Colour (LiteLookAndFeel::solo));
-    exclusiveSoloButton.setTooltip (jp (u8"Exclusive Solo（Cakewalk）\nON: ソロは1本だけ。次に S を押したトラック以外は解除。\nShift+S の Override は残る。OFF にした瞬間は今のソロを変えない。"));
-    exclusiveSoloButton.setToggleState (mixer.getExclusiveSoloMode(), juce::dontSendNotification);
-    exclusiveSoloButton.onClick = [this] {
-        mixer.setExclusiveSoloMode (exclusiveSoloButton.getToggleState());
-        saveAppSettings();
-        status.setText (makeStatusText(), juce::dontSendNotification);
-    };
     addTrackButton.onClick = [this] {
         {
             const juce::ScopedLock sl (engine.getCallbackLock());
@@ -88,13 +74,8 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
         controlSurface.refreshFeedback();
     };
 
-    addAndMakeVisible (audioButton);
     addAndMakeVisible (engineButton);
-    addAndMakeVisible (surfaceButton);
-    addAndMakeVisible (learnButton);
-    addAndMakeVisible (scanButton);
     addAndMakeVisible (addTrackButton);
-    addAndMakeVisible (exclusiveSoloButton);
 
     trackViewport.setViewedComponent (&trackList, false);
     trackViewport.setScrollBarsShown (false, true);
@@ -200,12 +181,7 @@ void MainComponent::resized()
     auto header = r.removeFromTop (44);
     title.setBounds (header.removeFromLeft (110));
     addTrackButton.setBounds (header.removeFromRight (100).reduced (2, 6));
-    exclusiveSoloButton.setBounds (header.removeFromRight (86).reduced (2, 6));
-    scanButton.setBounds (header.removeFromRight (110).reduced (2, 6));
-    learnButton.setBounds (header.removeFromRight (90).reduced (2, 6));
-    surfaceButton.setBounds (header.removeFromRight (90).reduced (2, 6));
     engineButton.setBounds (header.removeFromRight (100).reduced (2, 6));
-    audioButton.setBounds (header.removeFromRight (110).reduced (2, 6));
     status.setBounds (header.reduced (4, 0));
 
     if (masterStrip == nullptr)
@@ -228,7 +204,7 @@ void MainComponent::resized()
 
 juce::StringArray MainComponent::getMenuBarNames()
 {
-    return { jp (u8"ファイル"), jp (u8"ヘルプ") };
+    return { jp (u8"ファイル"), jp (u8"オプション"), jp (u8"ヘルプ") };
 }
 
 juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
@@ -236,6 +212,17 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
     juce::PopupMenu menu;
 
     if (topLevelMenuIndex == 1)
+    {
+        menu.addItem (menuAudioSettings, jp (u8"オーディオ設定..."));
+        menu.addItem (menuSurfaceSettings, jp (u8"サーフェス..."));
+        menu.addItem (menuMidiLearnSettings, jp (u8"MIDI学習..."));
+        menu.addItem (menuVstScan, jp (u8"VST3 スキャン..."), ! scanInProgress);
+        menu.addSeparator();
+        menu.addItem (menuOptionsGeneral, jp (u8"一般..."));
+        return menu;
+    }
+
+    if (topLevelMenuIndex == 2)
     {
         menu.addItem (menuSetupWizard, jp (u8"セットアップウィザード..."));
         return menu;
@@ -284,6 +271,16 @@ void MainComponent::menuItemSelected (int menuItemID, int)
     }
     else if (menuItemID == menuSetupWizard)
         showSetupWizard (false);
+    else if (menuItemID == menuAudioSettings)
+        showAudioSettings();
+    else if (menuItemID == menuSurfaceSettings)
+        showSurfaceSettings();
+    else if (menuItemID == menuMidiLearnSettings)
+        showMidiLearnSettings();
+    else if (menuItemID == menuVstScan)
+        showScanDialog();
+    else if (menuItemID == menuOptionsGeneral)
+        showOptionsGeneral();
     else if (menuItemID == menuQuit)
     {
         if (auto* app = juce::JUCEApplicationBase::getInstance())
@@ -339,13 +336,19 @@ void MainComponent::setScanStatus (const juce::String& text)
     status.setText (text, juce::dontSendNotification);
 }
 
-void MainComponent::scanFinished()
+void MainComponent::scanFinished (int failedCount)
 {
+    pruneMissingPlugins();
     savePluginList();
     const auto count = knownPlugins.getNumTypes();
     scanStatus.clear();
-    status.setText (jp (u8"VST3 ") + juce::String (count) + jp (u8" 個を登録しました"), juce::dontSendNotification);
-    scanButton.setEnabled (true);
+
+    auto text = jp (u8"VST3 ") + juce::String (count) + jp (u8" 個を登録しました");
+    if (failedCount > 0)
+        text += jp (u8"（読み込み失敗 ") + juce::String (failedCount) + jp (u8"）");
+    status.setText (text, juce::dontSendNotification);
+    scanInProgress = false;
+    menuItemsChanged();
 
     if (scanThread != nullptr)
     {
@@ -646,6 +649,34 @@ void MainComponent::showMidiLearnSettings()
     };
 }
 
+void MainComponent::showOptionsGeneral()
+{
+    auto panel = std::make_unique<OptionsGeneralPanel> (mixer.getExclusiveSoloMode(),
+                                                        appSettings.confirmQuit);
+    auto* panelPtr = panel.get();
+    panel->setSize (480, 280);
+
+    juce::DialogWindow::LaunchOptions options;
+    options.content.setOwned (panel.release());
+    options.dialogTitle = jp (u8"一般");
+    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+
+    auto* window = options.launchAsync();
+    panelPtr->onClose = [window] {
+        if (window != nullptr)
+            window->exitModalState (0);
+    };
+    panelPtr->onOk = [this, panelPtr] {
+        mixer.setExclusiveSoloMode (panelPtr->getExclusiveSolo());
+        appSettings.confirmQuit = panelPtr->getConfirmQuit();
+        saveAppSettings();
+        status.setText (makeStatusText(), juce::dontSendNotification);
+    };
+}
+
 void MainComponent::showLearnMenuForTrack (int trackIndex, MidiLearnTarget target)
 {
     juce::PopupMenu menu;
@@ -661,7 +692,7 @@ void MainComponent::showLearnMenuForTrack (int trackIndex, MidiLearnTarget targe
                                 {
                                     juce::AlertWindow::showMessageBoxAsync (
                                         juce::AlertWindow::InfoIcon, "LiteHost",
-                                        jp (u8"先に「MIDI学習」で入力デバイスを有効にしてください。"));
+                                        jp (u8"先に「オプション → MIDI学習」で入力デバイスを有効にしてください。"));
                                     return;
                                 }
                                 midiLearn.beginLearn (trackIndex, target);
@@ -738,10 +769,24 @@ void MainComponent::startPluginScan (const juce::FileSearchPath& paths)
     if (scanThread != nullptr && scanThread->isThreadRunning())
         return;
 
-    scanButton.setEnabled (false);
+    pruneMissingPlugins();
+
+    scanInProgress = true;
+    menuItemsChanged();
     setScanStatus (jp (u8"VST3 をスキャンしています..."));
     scanThread = std::make_unique<PluginScanThread> (*this, knownPlugins, *format, paths);
     scanThread->startThread();
+}
+
+void MainComponent::pruneMissingPlugins()
+{
+    const auto types = knownPlugins.getTypes();
+    for (int i = types.size(); --i >= 0;)
+    {
+        const auto& type = types.getReference (i);
+        if (! formatManager.doesPluginStillExist (type))
+            knownPlugins.removeType (type);
+    }
 }
 
 void MainComponent::promptAddPlugin (const juce::Uuid& trackId, bool master)
@@ -772,25 +817,14 @@ void MainComponent::promptAddPlugin (const juce::Uuid& trackId, bool master)
     }
 
     juce::PopupMenu menu;
-    juce::Array<juce::PluginDescription> ordered;
-    std::map<juce::String, juce::PopupMenu> groups;
-
-    int id = 1;
-    for (const auto& type : types)
-    {
-        ordered.add (type);
-        const auto vendor = type.manufacturerName.isNotEmpty() ? type.manufacturerName : juce::String ("Other");
-        groups[vendor].addItem (id++, type.name);
-    }
-
-    for (auto& [vendor, sub] : groups)
-        menu.addSubMenu (vendor, sub);
+    juce::KnownPluginList::addToMenu (menu, types, juce::KnownPluginList::sortByManufacturer);
 
     menu.showMenuAsync (juce::PopupMenu::Options(),
-                        [this, ordered, trackId, master] (int result) {
-                            if (result <= 0 || result > ordered.size())
+                        [this, types, trackId, master] (int result) {
+                            const int index = juce::KnownPluginList::getIndexChosenByMenu (types, result);
+                            if (index < 0)
                                 return;
-                            attachPlugin (ordered.getReference (result - 1), trackId, master);
+                            attachPlugin (types.getReference (index), trackId, master);
                         });
 }
 
@@ -1036,6 +1070,106 @@ void MainComponent::beginTrackDrag (TrackStrip& strip)
     startDragging (juce::String (TrackStrip::dragType) + ":" + strip.getTrackId().toString(), &strip);
 }
 
+void MainComponent::beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source)
+{
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (&source))
+        container->startDragging (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
+                                      + ":" + juce::String (pluginIndex),
+                                  &source);
+    else
+        startDragging (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
+                           + ":" + juce::String (pluginIndex),
+                       &source);
+}
+
+void MainComponent::transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
+                                    const juce::Uuid& toTrackId, bool copy)
+{
+    if (! juce::isPositiveAndBelow (pluginIndex, PluginChain::maxPlugins))
+        return;
+
+    if (fromTrackId == toTrackId && ! copy)
+        return;
+
+    if (copy)
+    {
+        PluginChain::PluginLoadRequest request;
+        bool ok = false;
+        {
+            const juce::ScopedLock sl (engine.getCallbackLock());
+            auto* from = engine.findTrack (fromTrackId);
+            auto* to = engine.findTrack (toTrackId);
+            if (from == nullptr || to == nullptr)
+                return;
+            if (! to->plugins.canAdd())
+            {
+                juce::MessageManager::callAsync ([] {
+                    juce::AlertWindow::showMessageBoxAsync (
+                        juce::AlertWindow::InfoIcon, "LiteHost",
+                        jp (u8"VST はトラック／メインアウトあたり最大 10 個までです。"));
+                });
+                return;
+            }
+            if (auto* plugin = from->plugins.get (pluginIndex))
+            {
+                request.description = from->plugins.descriptionAt (pluginIndex);
+                plugin->getStateInformation (request.state);
+                request.hasState = request.state.getSize() > 0;
+                request.bypass = from->plugins.isBypassed (pluginIndex);
+                ok = true;
+            }
+        }
+
+        if (! ok)
+            return;
+
+        auto* to = engine.findTrack (toTrackId);
+        if (to == nullptr)
+            return;
+
+        const auto result = loadPluginIntoChain (to->plugins, request, true);
+        if (result.plugin == nullptr)
+        {
+            juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
+                                                    result.error.isNotEmpty() ? result.error
+                                                                              : jp (u8"プラグインのコピーに失敗しました。"));
+            return;
+        }
+
+        if (result.needsDelayedArm)
+            armPluginAfterLaunch (result.plugin);
+
+        rebuildStrips();
+        return;
+    }
+
+    {
+        const juce::ScopedLock sl (engine.getCallbackLock());
+        auto* from = engine.findTrack (fromTrackId);
+        auto* to = engine.findTrack (toTrackId);
+        if (from == nullptr || to == nullptr)
+            return;
+        if (! to->plugins.canAdd())
+        {
+            juce::MessageManager::callAsync ([] {
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::AlertWindow::InfoIcon, "LiteHost",
+                    jp (u8"VST はトラック／メインアウトあたり最大 10 個までです。"));
+            });
+            return;
+        }
+
+        bool bypassed = false;
+        auto plugin = from->plugins.take (pluginIndex, bypassed);
+        if (plugin == nullptr)
+            return;
+
+        to->plugins.insertPrepared (to->plugins.size(), std::move (plugin), bypassed);
+    }
+
+    rebuildStrips();
+}
+
 void MainComponent::reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter)
 {
     if (fromId == targetId)
@@ -1077,6 +1211,43 @@ bool MainComponent::applySavedWindowState (juce::ResizableWindow& window)
     return window.restoreWindowStateFromString (appSettings.windowState);
 }
 
+bool MainComponent::requestQuit()
+{
+    if (! appSettings.confirmQuit)
+        return true;
+
+    if (quitConfirmOpen)
+        return false;
+
+    quitConfirmOpen = true;
+
+    // Use in-app AlertWindow (not Windows TaskDialog) so LookAndFeel applies.
+    // Cancel is the default (Return / Escape). Explicit return values avoid AlertWindow's
+    // (index+1)%N remapping used by MessageBoxOptions helpers.
+    auto* aw = new juce::AlertWindow ("LiteHost",
+                                      jp (u8"LiteHost を終了しますか？"),
+                                      juce::MessageBoxIconType::QuestionIcon,
+                                      this);
+    aw->addButton (jp (u8"キャンセル"), 0,
+                   juce::KeyPress (juce::KeyPress::escapeKey),
+                   juce::KeyPress (juce::KeyPress::returnKey));
+    aw->addButton (jp (u8"OK"), 1);
+
+    aw->enterModalState (true, juce::ModalCallbackFunction::create (
+                                   [safe = juce::Component::SafePointer<MainComponent> (this)] (int result) {
+                                       if (safe == nullptr)
+                                           return;
+
+                                       safe->quitConfirmOpen = false;
+                                       if (result == 1)
+                                           if (auto* app = juce::JUCEApplicationBase::getInstance())
+                                               app->quit();
+                                   }),
+                         true);
+
+    return false;
+}
+
 void MainComponent::captureWindowState()
 {
     if (auto* top = dynamic_cast<juce::ResizableWindow*> (getTopLevelComponent()))
@@ -1090,7 +1261,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.1.1");
+                             : juce::String ("0.1.2");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {
@@ -1165,6 +1336,8 @@ void MainComponent::loadPluginList()
 {
     if (auto xml = juce::XmlDocument::parse (AppPaths::knownPluginsFile()))
         knownPlugins.recreateFromXml (*xml);
+
+    pruneMissingPlugins();
 }
 
 void MainComponent::loadAppSettings()

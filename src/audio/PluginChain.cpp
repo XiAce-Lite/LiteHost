@@ -238,6 +238,41 @@ juce::AudioPluginInstance* PluginChain::addPrepared (std::unique_ptr<juce::Audio
     return raw;
 }
 
+std::unique_ptr<juce::AudioPluginInstance> PluginChain::take (int index, bool& bypassedOut)
+{
+    bypassedOut = false;
+    if (! juce::isPositiveAndBelow (index, (int) slots.size()))
+        return {};
+
+    auto& slot = slots[(size_t) index];
+    bypassedOut = slot.bypassed;
+    auto plugin = std::move (slot.plugin);
+    slots.erase (slots.begin() + index);
+    return plugin;
+}
+
+juce::AudioPluginInstance* PluginChain::insertPrepared (int index,
+                                                        std::unique_ptr<juce::AudioPluginInstance> plugin,
+                                                        bool bypassed)
+{
+    if (plugin == nullptr || ! canAdd())
+        return nullptr;
+
+    if (playHead != nullptr)
+        plugin->setPlayHead (playHead);
+
+    Slot slot;
+    slot.description = plugin->getPluginDescription();
+    slot.plugin = std::move (plugin);
+    slot.bypassed = bypassed;
+    refreshSlotChannels (slot);
+
+    auto* raw = slot.plugin.get();
+    index = juce::jlimit (0, (int) slots.size(), index);
+    slots.insert (slots.begin() + index, std::move (slot));
+    return raw;
+}
+
 void PluginChain::remove (int index)
 {
     if (! juce::isPositiveAndBelow (index, (int) slots.size()))

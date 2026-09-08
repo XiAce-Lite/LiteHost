@@ -216,6 +216,10 @@ TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
     chips.onBypassChanged = [this] (int index, bool bypassed) {
         track.plugins.setBypassed (index, bypassed);
     };
+    chips.onDragStart = [this] (int index, juce::Component& source) -> bool {
+        owner.beginPluginDrag (track.id, index, source);
+        return true;
+    };
     addAndMakeVisible (chips);
     addAndMakeVisible (meter);
 
@@ -246,6 +250,14 @@ void TrackStrip::paint (juce::Graphics& g)
         g.setColour (juce::Colour (LiteLookAndFeel::accent));
         const float x = dropBefore ? r.getX() + 2.0f : r.getRight() - 3.0f;
         g.fillRoundedRectangle (x, r.getY() + 6.0f, 3.0f, r.getHeight() - 12.0f, 1.5f);
+    }
+
+    if (pluginDropHighlight)
+    {
+        g.setColour (juce::Colour (LiteLookAndFeel::accent).withAlpha (0.22f));
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (juce::Colour (LiteLookAndFeel::accent));
+        g.drawRoundedRectangle (r, 8.0f, 2.0f);
     }
 }
 
@@ -278,7 +290,8 @@ bool TrackStrip::isTrackDragSource (const juce::Component* component) const noex
 
 bool TrackStrip::isInterestedInDragSource (const SourceDetails& details)
 {
-    return details.description.toString().startsWith (dragType);
+    const auto desc = details.description.toString();
+    return desc.startsWith (dragType) || desc.startsWith (pluginDragType);
 }
 
 void TrackStrip::itemDragEnter (const SourceDetails& details)
@@ -288,6 +301,16 @@ void TrackStrip::itemDragEnter (const SourceDetails& details)
 
 void TrackStrip::itemDragMove (const SourceDetails& details)
 {
+    const auto desc = details.description.toString();
+    if (desc.startsWith (pluginDragType))
+    {
+        dropBefore = dropAfter = false;
+        pluginDropHighlight = true;
+        repaint();
+        return;
+    }
+
+    pluginDropHighlight = false;
     const bool before = details.localPosition.x < getWidth() / 2;
     dropBefore = before;
     dropAfter = ! before;
@@ -297,20 +320,34 @@ void TrackStrip::itemDragMove (const SourceDetails& details)
 void TrackStrip::itemDragExit (const SourceDetails&)
 {
     dropBefore = dropAfter = false;
+    pluginDropHighlight = false;
     repaint();
 }
 
 void TrackStrip::itemDropped (const SourceDetails& details)
 {
-    const bool after = details.localPosition.x >= getWidth() / 2;
+    const auto desc = details.description.toString();
     dropBefore = dropAfter = false;
+    pluginDropHighlight = false;
     repaint();
 
-    const auto desc = details.description.toString();
+    const auto pluginPrefix = juce::String (pluginDragType) + ":";
+    if (desc.startsWith (pluginPrefix))
+    {
+        const auto body = desc.fromFirstOccurrenceOf (":", false, false);
+        const auto trackToken = body.upToFirstOccurrenceOf (":", false, false);
+        const auto indexToken = body.fromFirstOccurrenceOf (":", false, false);
+        const bool copy = juce::ModifierKeys::getCurrentModifiers().isCommandDown()
+                       || juce::ModifierKeys::getCurrentModifiers().isCtrlDown();
+        owner.transferPlugin (juce::Uuid (trackToken), indexToken.getIntValue(), track.id, copy);
+        return;
+    }
+
     const auto prefix = juce::String (dragType) + ":";
     if (! desc.startsWith (prefix))
         return;
 
+    const bool after = details.localPosition.x >= getWidth() / 2;
     owner.reorderTrack (juce::Uuid (desc.fromFirstOccurrenceOf (":", false, false)),
                         track.id, after);
 }

@@ -36,3 +36,21 @@ private:
     juce::ComboBox inBox;
     juce::TextButton clearAll, ok, close;
 };
+
+class OptionsGeneralPanel : public juce::Component
+{
+public:
+    std::function<void()> onOk;
+    std::function<void()> onClose;
+
+    OptionsGeneralPanel (bool exclusiveSolo, bool confirmQuit);
+    void resized() override;
+
+    bool getExclusiveSolo() const { return exclusiveSoloToggle.getToggleState(); }
+    bool getConfirmQuit() const { return confirmQuitToggle.getToggleState(); }
+
+private:
+    juce::Label title, exclusiveHint, quitHint;
+    juce::ToggleButton exclusiveSoloToggle, confirmQuitToggle;
+    juce::TextButton ok, close;
+};

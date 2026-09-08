@@ -194,3 +194,59 @@ void MidiLearnSettingsPanel::resized()
     close.setBounds (buttons.removeFromRight (90).reduced (2));
     ok.setBounds (buttons.removeFromRight (90).reduced (2));
 }
+
+OptionsGeneralPanel::OptionsGeneralPanel (bool exclusiveSolo, bool confirmQuit)
+{
+    title.setText (jp (u8"一般"), juce::dontSendNotification);
+    title.setFont (LiteLookAndFeel::uiFont (16.0f, juce::Font::bold));
+    addAndMakeVisible (title);
+
+    exclusiveSoloToggle.setButtonText (jp (u8"排他ソロ"));
+    exclusiveSoloToggle.setClickingTogglesState (true);
+    exclusiveSoloToggle.setToggleState (exclusiveSolo, juce::dontSendNotification);
+    exclusiveSoloToggle.setTooltip (jp (u8"Exclusive Solo（Cakewalk）\nON: ソロは1本だけ。次に S を押したトラック以外は解除。\nShift+S の Override は残る。OFF にした瞬間は今のソロを変えない。"));
+    addAndMakeVisible (exclusiveSoloToggle);
+
+    exclusiveHint.setText (jp (u8"ON のとき、通常のソロは1トラックだけ有効になります（Shift+ソロの Override は残ります）。"),
+                           juce::dontSendNotification);
+    exclusiveHint.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
+    addAndMakeVisible (exclusiveHint);
+
+    confirmQuitToggle.setButtonText (jp (u8"終了時に確認する"));
+    confirmQuitToggle.setClickingTogglesState (true);
+    confirmQuitToggle.setToggleState (confirmQuit, juce::dontSendNotification);
+    addAndMakeVisible (confirmQuitToggle);
+
+    quitHint.setText (jp (u8"ON のとき、アプリ終了前に OK / キャンセルを表示します（既定はキャンセル）。"),
+                      juce::dontSendNotification);
+    quitHint.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
+    addAndMakeVisible (quitHint);
+
+    ok.setButtonText (jp (u8"OK"));
+    ok.onClick = [this] {
+        if (onOk)
+            onOk();
+        if (onClose)
+            onClose();
+    };
+    addAndMakeVisible (ok);
+
+    close.setButtonText (jp (u8"閉じる"));
+    close.onClick = [this] { if (onClose) onClose(); };
+    addAndMakeVisible (close);
+}
+
+void OptionsGeneralPanel::resized()
+{
+    auto r = getLocalBounds().reduced (16);
+    title.setBounds (r.removeFromTop (24));
+    r.removeFromTop (12);
+    exclusiveSoloToggle.setBounds (r.removeFromTop (28).removeFromLeft (200));
+    exclusiveHint.setBounds (r.removeFromTop (40));
+    r.removeFromTop (12);
+    confirmQuitToggle.setBounds (r.removeFromTop (28).removeFromLeft (220));
+    quitHint.setBounds (r.removeFromTop (40));
+    auto buttons = r.removeFromBottom (36);
+    close.setBounds (buttons.removeFromRight (90).reduced (2));
+    ok.setBounds (buttons.removeFromRight (90).reduced (2));
+}

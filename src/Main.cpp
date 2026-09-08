@@ -9,7 +9,7 @@ class LiteHostApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "LiteHost"; }
-    const juce::String getApplicationVersion() override { return "0.1.1"; }
+    const juce::String getApplicationVersion() override { return "0.1.2"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise (const juce::String& commandLine) override
@@ -64,6 +64,17 @@ public:
 
     void systemRequestedQuit() override
     {
+        if (mainWindow != nullptr)
+        {
+            if (auto* content = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+            {
+                // requestQuit() returns false when a confirm dialog is shown (or cancelled).
+                // It will call quit() itself if the user confirms.
+                if (! content->requestQuit())
+                    return;
+            }
+        }
+
         quit();
     }
 

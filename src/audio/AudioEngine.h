@@ -144,6 +144,7 @@ private:
     void applyCeiling (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void applyGate (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void copyToOutputs (float* const* outputs, int numOutputChannels, int numSamples) noexcept;
+    void applyOutputFadeIn (int numSamples) noexcept;
     void drainPendingMidi (int numSamples) noexcept;
     const juce::MidiBuffer* findDeviceMidi (const juce::String& deviceId) const noexcept;
 
@@ -172,6 +173,7 @@ private:
     double sampleRate = 48000.0;
     int blockSize = 512;
     bool running = false;
+    int outputFadeSamplesRemaining = 0;
     float gateEnv = 0.0f;
     float gateGain = 1.0f;
     bool gateOpen = true;
