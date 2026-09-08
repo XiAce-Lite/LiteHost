@@ -1,7 +1,8 @@
 #include "MixerStrips.h"
-#include "MainComponent.h"
 #include "LookAndFeel.h"
 #include "Utf8.h"
+#include "audio/AudioEngine.h"
+#include "session/MixerSession.h"
 #include <algorithm>
 #include <cmath>
 
@@ -121,7 +122,7 @@ namespace
     }
 }
 
-TrackStrip::TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn)
+TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
     : owner (ownerIn),
       track (trackIn)
 {
@@ -653,7 +654,7 @@ void TrackStrip::LearnClickListener::mouseDown (const juce::MouseEvent& e)
     strip.owner.showLearnMenuForTrack (strip.owner.indexOfTrack (strip.track), target);
 }
 
-MasterStrip::MasterStrip (MainComponent& ownerIn)
+MasterStrip::MasterStrip (MixerStripHost& ownerIn)
     : owner (ownerIn)
 {
     // Keep Tab cycling inside master so track-strip focus orders cannot interleave.

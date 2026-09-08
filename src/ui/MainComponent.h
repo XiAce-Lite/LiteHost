@@ -1,8 +1,7 @@
 #pragma once
 
 #include "LookAndFeel.h"
-#include "Utf8.h"
-#include "MixerStrips.h"
+#include "MixerStripHost.h"
 #include "app/AppSettingsStore.h"
 #include "audio/AudioEngine.h"
 #include "control/ControlSurface.h"
@@ -12,6 +11,7 @@
 class PluginEditorWindow;
 class PluginScanThread;
 class TrackStrip;
+class MasterStrip;
 class UpdateChecker;
 class StartupProgress;
 
@@ -20,7 +20,8 @@ class MainComponent : public juce::Component,
                       public juce::MenuBarModel,
                       public juce::ChangeListener,
                       public juce::Timer,
-                      public MixerSession::Host
+                      public MixerSession::Host,
+                      public MixerStripHost
 {
 public:
     explicit MainComponent (juce::String projectPathToOpen = {}, StartupProgress* progress = nullptr);
@@ -36,36 +37,36 @@ public:
     juce::PopupMenu getMenuForIndex (int topLevelMenuIndex, const juce::String& menuName) override;
     void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
 
-    void setScanStatus (const juce::String& text);
-    void scanFinished (int failedCount = 0);
+    void setScanStatus (const juce::String& text) override;
+    void scanFinished (int failedCount = 0) override;
+    juce::Component* asComponent() noexcept override { return this; }
 
-    void promptAddPlugin (const juce::Uuid& trackId, bool master);
-    void openPluginEditor (juce::AudioPluginInstance& plugin);
-    void removePluginFromTrack (const juce::Uuid& trackId, int index);
-    void removePluginFromMaster (int index);
+    void promptAddPlugin (const juce::Uuid& trackId, bool master) override;
+    void openPluginEditor (juce::AudioPluginInstance& plugin) override;
+    void removePluginFromTrack (const juce::Uuid& trackId, int index) override;
+    void removePluginFromMaster (int index) override;
     void closeEditorsFor (juce::AudioPluginInstance* plugin);
-    void removeTrack (const juce::Uuid& id);
+    void removeTrack (const juce::Uuid& id) override;
     void runSyncRoomLoadTest();
-    void showLearnMenuForTrack (int trackIndex, MidiLearnTarget target);
-    void syncTrackMidiInputs();
-    void beginTrackDrag (TrackStrip& strip);
-    void beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source);
-    void beginMasterPluginDrag (int pluginIndex, juce::Component& source);
-    /** Move a plugin to toTrackId at insertIndex (0 = first). Same-track reorder is supported. */
+    void showLearnMenuForTrack (int trackIndex, MidiLearnTarget target) override;
+    void syncTrackMidiInputs() override;
+    void beginTrackDrag (TrackStrip& strip) override;
+    void beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source) override;
+    void beginMasterPluginDrag (int pluginIndex, juce::Component& source) override;
     void transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
-                         const juce::Uuid& toTrackId, int insertIndex);
-    void reorderMasterPlugin (int pluginIndex, int insertIndex);
-    void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter);
-    void applySoloClick (const juce::Uuid& trackId, bool shift);
+                         const juce::Uuid& toTrackId, int insertIndex) override;
+    void reorderMasterPlugin (int pluginIndex, int insertIndex) override;
+    void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter) override;
+    void applySoloClick (const juce::Uuid& trackId, bool shift) override;
     bool applySavedWindowState (juce::ResizableWindow& window);
     /** Returns false if quit was cancelled or a confirm dialog is already open.
         When confirmQuit is on, may return false immediately and call quit later via the app. */
     bool requestQuit();
 
-    juce::AudioDeviceManager& getDeviceManager() noexcept { return deviceManager; }
-    AudioEngine& getEngine() noexcept { return engine; }
-    MixerSession& getMixer() noexcept { return mixer; }
-    int indexOfTrack (const TrackProcessor& track) const;
+    juce::AudioDeviceManager& getDeviceManager() noexcept override { return deviceManager; }
+    AudioEngine& getEngine() noexcept override { return engine; }
+    MixerSession& getMixer() noexcept override { return mixer; }
+    int indexOfTrack (const TrackProcessor& track) const override;
 
     bool isAudioEngineRunning() const override;
     void setAudioEngineRunning (bool shouldRun) override;
@@ -73,7 +74,7 @@ public:
     void midiLearnFinished (bool assigned) override;
     void mixerUiChanged() override;
     void projectEdited() override;
-    void markProjectDirty();
+    void markProjectDirty() override;
     void clearProjectDirty();
     /** If dirty, ask Save / Discard / Cancel. Calls proceed only for Save(success) or Discard. */
     void promptIfProjectDirty (std::function<void()> proceed);
@@ -138,9 +139,6 @@ private:
     bool isPluginStillLoaded (juce::AudioPluginInstance* plugin) const;
     void refreshAddPluginButtons();
     juce::String makeStatusText() const;
-    juce::FileSearchPath defaultVst3ScanPaths() const;
-    juce::FileSearchPath buildScanPaths() const;
-    juce::File getDefaultProjectsDir() const;
     void syncStripsFromEngine();
     void captureWindowState();
     void startUpdateCheck();
@@ -168,8 +166,8 @@ private:
     juce::MenuBarComponent menuBar;
     juce::Label title;
     juce::Label status;
-    juce::TextButton engineButton { jp (u8"オーディオ停止") };
-    juce::TextButton addTrackButton { jp (u8"トラック追加") };
+    juce::TextButton engineButton;
+    juce::TextButton addTrackButton;
 
     juce::Viewport trackViewport;
     juce::Component trackList;

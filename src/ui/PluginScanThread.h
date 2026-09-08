@@ -1,13 +1,12 @@
 #pragma once
 
+#include "MixerStripHost.h"
 #include <JuceHeader.h>
-
-class MainComponent;
 
 class PluginScanThread : public juce::Thread
 {
 public:
-    PluginScanThread (MainComponent& ownerIn,
+    PluginScanThread (MixerStripHost& ownerIn,
                       juce::KnownPluginList& list,
                       juce::AudioPluginFormat& format,
                       juce::FileSearchPath pathsIn);
@@ -15,7 +14,7 @@ public:
     void run() override;
 
 private:
-    MainComponent& owner;
+    MixerStripHost& owner;
     juce::KnownPluginList& list;
     juce::AudioPluginFormat& format;
     juce::FileSearchPath paths;

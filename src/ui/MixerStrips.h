@@ -1,10 +1,9 @@
 #pragma once
 
 #include "MixerWidgets.h"
-#include "audio/AudioEngine.h"
+#include "MixerStripHost.h"
+#include "audio/TrackProcessor.h"
 #include "control/MidiLearn.h"
-
-class MainComponent;
 
 class TrackStrip : public juce::Component,
                    public juce::DragAndDropTarget
@@ -14,7 +13,7 @@ public:
     static constexpr const char* dragType = "litehost-track";
     static constexpr const char* pluginDragType = "litehost-plugin";
 
-    TrackStrip (MainComponent& ownerIn, TrackProcessor& trackIn);
+    TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn);
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -34,15 +33,15 @@ public:
 private:
     bool isTrackDragSource (const juce::Component* component) const noexcept;
     void updateSoloButton();
+
+    MixerStripHost& owner;
+    TrackProcessor& track;
     struct LearnClickListener : public juce::MouseListener
     {
         TrackStrip& strip;
         explicit LearnClickListener (TrackStrip& s) : strip (s) {}
         void mouseDown (const juce::MouseEvent& e) override;
     };
-
-    MainComponent& owner;
-    TrackProcessor& track;
     LearnClickListener learnClicks { *this };
     juce::Label name, panLabel, trimLabel;
     juce::Component dragGrip;
@@ -60,7 +59,7 @@ private:
 class MasterStrip : public juce::Component
 {
 public:
-    explicit MasterStrip (MainComponent& ownerIn);
+    explicit MasterStrip (MixerStripHost& ownerIn);
 
     void paint (juce::Graphics& g) override;
     void resized() override;
@@ -69,14 +68,13 @@ public:
     void setPeak (float value);
 
 private:
+    MixerStripHost& owner;
     struct LearnClickListener : public juce::MouseListener
     {
         MasterStrip& strip;
         explicit LearnClickListener (MasterStrip& s) : strip (s) {}
         void mouseDown (const juce::MouseEvent& e) override;
     };
-
-    MainComponent& owner;
     LearnClickListener learnClicks { *this };
     juce::Label title, reverbMixLabel, reverbSizeLabel, limitLabel, gateLabel, masterGainLabel;
     juce::TextButton reverbToggle, limiterToggle, gateToggle, addFx;

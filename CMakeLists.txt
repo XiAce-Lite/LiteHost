@@ -62,6 +62,9 @@ target_sources(LiteHost PRIVATE
     src/session/MixerSession.cpp
     src/audio/PluginChain.h
     src/audio/PluginChain.cpp
+    src/audio/HostPlayHead.h
+    src/audio/TrackProcessor.h
+    src/audio/TrackProcessor.cpp
     src/audio/AudioEngine.h
     src/audio/AudioEngine.cpp
     src/audio/SyncRoomFinder.h
@@ -71,6 +74,10 @@ target_sources(LiteHost PRIVATE
     src/control/MidiLearn.h
     src/control/MidiLearn.cpp
     src/ui/LookAndFeel.h
+    src/ui/LookAndFeel.cpp
+    src/ui/AppModalDialog.h
+    src/ui/AppModalDialog.cpp
+    src/ui/MixerStripHost.h
     src/ui/MixerWidgets.h
     src/ui/MixerWidgets.cpp
     src/ui/MixerStrips.h
@@ -93,6 +100,7 @@ target_sources(LiteHost PRIVATE
     src/ui/StartupSplash.cpp
     src/ui/MainComponent.h
     src/ui/MainComponent.cpp
+    src/ui/MainComponent_Project.cpp
 )
 
 target_include_directories(LiteHost PRIVATE src)

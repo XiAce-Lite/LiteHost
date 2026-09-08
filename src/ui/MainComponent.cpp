@@ -1,4 +1,6 @@
 #include "MainComponent.h"
+#include "AppModalDialog.h"
+#include "MixerStrips.h"
 #include "CrashLog.h"
 #include "Utf8.h"
 #include "PluginEditorWindow.h"
@@ -20,407 +22,31 @@ namespace
 {
     constexpr int preferredBufferSize = 128;
 
-    /**
-     * In-app modal (child of MainComponent). Same HWND as the main window so
-     * keyboard focus works; title-bar close button included.
-     */
-    class AppModalOverlay final : public juce::Component,
-                                  private juce::ComponentListener
+    juce::String preferredAudioDeviceTypeHint()
     {
-    public:
-        explicit AppModalOverlay (juce::DialogWindow::LaunchOptions& options)
-            : titleText (options.dialogTitle),
-              panelColour (options.dialogBackgroundColour),
-              escapeCloses (options.escapeKeyTriggersCloseButton)
-        {
-            setFocusContainerType (juce::Component::FocusContainerType::keyboardFocusContainer);
-            setWantsKeyboardFocus (true);
-            setMouseClickGrabsKeyboardFocus (false);
-            getProperties().set ("appModalOverlay", true);
-
-            content.reset (options.content.release());
-            jassert (content != nullptr);
-            addAndMakeVisible (*content);
-            prepareTabStops (*content);
-
-            closeButton.setButtonText ("x");
-            closeButton.setTooltip (jp (u8"閉じる"));
-            closeButton.setWantsKeyboardFocus (false);
-            closeButton.onClick = [this] { exitModalState (0); };
-            addAndMakeVisible (closeButton);
-
-            contentSize = { content->getWidth(), content->getHeight() };
-            if (contentSize.x <= 0 || contentSize.y <= 0)
-                contentSize = { 420, 320 };
-        }
-
-        ~AppModalOverlay() override
-        {
-            if (auto* p = getParentComponent())
-                p->removeComponentListener (this);
-        }
-
-        void parentHierarchyChanged() override
-        {
-            if (auto* p = getParentComponent())
-            {
-                p->addComponentListener (this);
-                setBounds (p->getLocalBounds());
-            }
-        }
-
-        void componentMovedOrResized (juce::Component& c, bool, bool wasResized) override
-        {
-            if (wasResized && &c == getParentComponent())
-                setBounds (c.getLocalBounds());
-        }
-
-        void componentBeingDeleted (juce::Component& c) override
-        {
-            if (&c == getParentComponent())
-                c.removeComponentListener (this);
-        }
-
-        void paint (juce::Graphics& g) override
-        {
-            g.fillAll (juce::Colours::black.withAlpha (0.55f));
-
-            const auto panel = getPanelBounds().toFloat();
-            g.setColour (panelColour);
-            g.fillRoundedRectangle (panel, 8.0f);
-            g.setColour (juce::Colour (0xff3a4254));
-            g.drawRoundedRectangle (panel, 8.0f, 1.0f);
-
-            auto titleArea = getPanelBounds().removeFromTop (titleBarH);
-            g.setColour (juce::Colour (LiteLookAndFeel::text));
-            g.setFont (LiteLookAndFeel::uiFont (15.0f, juce::Font::bold));
-            g.drawText (titleText, titleArea.withTrimmedRight (titleBarH + 8).reduced (14, 0),
-                        juce::Justification::centredLeft, true);
-        }
-
-        void resized() override
-        {
-            const auto panel = getPanelBounds();
-            closeButton.setBounds (panel.getRight() - titleBarH + 4, panel.getY() + 4,
-                                   titleBarH - 8, titleBarH - 8);
-            if (content != nullptr)
-                content->setBounds (panel.withTrimmedTop (titleBarH));
-        }
-
-        void mouseDown (const juce::MouseEvent& e) override
-        {
-            if (escapeCloses && ! getPanelBounds().contains (e.getPosition()))
-                exitModalState (0);
-        }
-
-        bool keyPressed (const juce::KeyPress& key) override
-        {
-            if (key.isKeyCode (juce::KeyPress::tabKey))
-                return cycleFocus (! key.getModifiers().isShiftDown());
-
-            if (escapeCloses && key.isKeyCode (juce::KeyPress::escapeKey))
-            {
-                exitModalState (0);
-                return true;
-            }
-
-            return false;
-        }
-
-        bool cycleFocus (bool forward)
-        {
-            // KEYDOWN + WM_CHAR can deliver Tab twice; ignore the duplicate.
-            const auto now = juce::Time::getMillisecondCounter();
-            if (now - lastTabMs < 80)
-                return true;
-            lastTabMs = now;
-
-            juce::Array<juce::Component*> focusable;
-            collectFocusable (content.get(), focusable);
-            if (focusable.isEmpty())
-                return false;
-
-            auto* focused = juce::Component::getCurrentlyFocusedComponent();
-            int index = -1;
-            if (focused != nullptr)
-            {
-                for (int i = 0; i < focusable.size(); ++i)
-                {
-                    auto* c = focusable.getUnchecked (i);
-                    if (c == focused || c->isParentOf (focused))
-                    {
-                        index = i;
-                        break;
-                    }
-                }
-            }
-
-            const int n = focusable.size();
-            const int next = index < 0 ? 0
-                                       : (forward ? (index + 1) % n : (index - 1 + n) % n);
-            auto* target = focusable.getUnchecked (next);
-            target->grabKeyboardFocus();
-            target->repaint();
-            if (focused != nullptr)
-                focused->repaint();
-            return true;
-        }
-
-    private:
-        static constexpr int titleBarH = 40;
-        static constexpr int panelPad = 24;
-
-        juce::Rectangle<int> getPanelBounds() const
-        {
-            const int w = juce::jmin (contentSize.x, juce::jmax (200, getWidth() - panelPad * 2));
-            const int h = juce::jmin (contentSize.y + titleBarH,
-                                     juce::jmax (160, getHeight() - panelPad * 2));
-            return { (getWidth() - w) / 2, (getHeight() - h) / 2, w, h };
-        }
-
-        static void prepareTabStops (juce::Component& root)
-        {
-            for (int i = 0; i < root.getNumChildComponents(); ++i)
-            {
-                auto* c = root.getChildComponent (i);
-                if (c == nullptr)
-                    continue;
-
-                if (dynamic_cast<juce::ComboBox*> (c) != nullptr
-                    || dynamic_cast<juce::Button*> (c) != nullptr
-                    || dynamic_cast<juce::ListBox*> (c) != nullptr
-                    || dynamic_cast<juce::TreeView*> (c) != nullptr
-                    || dynamic_cast<juce::TextEditor*> (c) != nullptr
-                    || dynamic_cast<juce::FilenameComponent*> (c) != nullptr)
-                {
-                    c->setWantsKeyboardFocus (true);
-                }
-                else if (auto* slider = dynamic_cast<juce::Slider*> (c))
-                {
-                    // Prefer the numeric text box for Tab; keep the track mouse-only.
-                    slider->setWantsKeyboardFocus (slider->getTextBoxPosition() == juce::Slider::NoTextBox);
-                }
-                else if (auto* label = dynamic_cast<juce::Label*> (c))
-                {
-                    const bool sliderTextBox = dynamic_cast<juce::Slider*> (label->getParentComponent()) != nullptr;
-                    label->setWantsKeyboardFocus (sliderTextBox || label->isEditable());
-                }
-
-                prepareTabStops (*c);
-            }
-        }
-
-        static bool isTabStop (juce::Component& c)
-        {
-            if (! c.isVisible() || ! c.isEnabled() || c.getWidth() <= 0 || c.getHeight() <= 0)
-                return false;
-
-            if (dynamic_cast<juce::Button*> (&c) != nullptr
-                || dynamic_cast<juce::ComboBox*> (&c) != nullptr
-                || dynamic_cast<juce::ListBox*> (&c) != nullptr
-                || dynamic_cast<juce::TreeView*> (&c) != nullptr
-                || dynamic_cast<juce::TextEditor*> (&c) != nullptr
-                || dynamic_cast<juce::FilenameComponent*> (&c) != nullptr)
-            {
-                return c.getWantsKeyboardFocus();
-            }
-
-            if (auto* slider = dynamic_cast<juce::Slider*> (&c))
-                return slider->getWantsKeyboardFocus()
-                    && slider->getTextBoxPosition() == juce::Slider::NoTextBox;
-
-            if (auto* label = dynamic_cast<juce::Label*> (&c))
-            {
-                if (dynamic_cast<juce::Slider*> (label->getParentComponent()) != nullptr)
-                    return true;
-                return label->isEditable() && label->getWantsKeyboardFocus();
-            }
-
-            return false;
-        }
-
-        static void collectFocusableRecursive (juce::Component* root, juce::Array<juce::Component*>& out)
-        {
-            if (root == nullptr)
-                return;
-
-            for (int i = 0; i < root->getNumChildComponents(); ++i)
-            {
-                auto* c = root->getChildComponent (i);
-                if (c == nullptr || ! c->isVisible() || ! c->isEnabled())
-                    continue;
-
-                if (isTabStop (*c))
-                    out.add (c);
-
-                collectFocusableRecursive (c, out);
-            }
-        }
-
-        static void collectFocusable (juce::Component* root, juce::Array<juce::Component*>& out)
-        {
-            collectFocusableRecursive (root, out);
-
-            // Reading order: top → bottom, then left → right (same row ≈ 10px).
-            struct RowCol
-            {
-                juce::Component* c;
-                int row;
-                int x;
-            };
-
-            juce::Array<RowCol> keyed;
-            keyed.ensureStorageAllocated (out.size());
-            for (auto* c : out)
-            {
-                const auto screen = c->getScreenBounds();
-                keyed.add ({ c, screen.getY(), screen.getX() });
-            }
-
-            std::sort (keyed.begin(), keyed.end(), [] (const RowCol& a, const RowCol& b) {
-                if (std::abs (a.row - b.row) > 10)
-                    return a.row < b.row;
-                if (a.x != b.x)
-                    return a.x < b.x;
-                return a.row < b.row;
-            });
-
-            out.clearQuick();
-            for (auto& item : keyed)
-                out.add (item.c);
-        }
-
-        juce::String titleText;
-        juce::Colour panelColour;
-        bool escapeCloses = true;
-        juce::uint32 lastTabMs = 0;
-        juce::Point<int> contentSize;
-        std::unique_ptr<juce::Component> content;
-        juce::TextButton closeButton;
-
-        JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AppModalOverlay)
-    };
-
-    juce::Component* launchAppDialog (juce::DialogWindow::LaunchOptions& options)
-    {
-        auto* host = options.componentToCentreAround;
-        if (host == nullptr)
-            return nullptr;
-
-        auto* overlay = new AppModalOverlay (options);
-        host->addAndMakeVisible (overlay);
-        overlay->setBounds (host->getLocalBounds());
-        overlay->toFront (true);
-        overlay->enterModalState (true, nullptr, true);
-
-        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<AppModalOverlay> (overlay)] {
-            if (safe == nullptr)
-                return;
-            safe->toFront (true);
-            safe->cycleFocus (true);
-        });
-
-        return overlay;
+       #if JUCE_WINDOWS
+        return "ASIO";
+       #elif JUCE_MAC
+        return "CoreAudio";
+       #else
+        return {};
+       #endif
     }
 
-    bool forwardTabToAppModal (juce::Component& host, const juce::KeyPress& key)
+    bool isPreferredAudioDeviceType (const juce::String& typeName)
     {
-        if (! key.isKeyCode (juce::KeyPress::tabKey))
+        const auto preferred = preferredAudioDeviceTypeHint();
+        if (preferred.isEmpty())
             return false;
 
-        for (int i = 0; i < host.getNumChildComponents(); ++i)
-            if (auto* overlay = dynamic_cast<AppModalOverlay*> (host.getChildComponent (i)))
-                return overlay->cycleFocus (! key.getModifiers().isShiftDown());
-
-        return false;
-    }
-
-    bool nudgeFocusedSlider (const juce::KeyPress& key)
-    {
-        const bool up = key.isKeyCode (juce::KeyPress::upKey) || key.isKeyCode (juce::KeyPress::rightKey);
-        const bool down = key.isKeyCode (juce::KeyPress::downKey) || key.isKeyCode (juce::KeyPress::leftKey);
-        if (! up && ! down)
-            return false;
-
-        if (key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
-            return false;
-
-        auto* focused = juce::Component::getCurrentlyFocusedComponent();
-        if (focused == nullptr)
-            return false;
-
-        auto* slider = dynamic_cast<juce::Slider*> (focused);
-        if (slider == nullptr)
-            slider = focused->findParentComponentOfClass<juce::Slider>();
-        if (slider == nullptr)
-            return false;
-
-        double step = slider->getInterval();
-        if (step <= 0.0)
-            step = 0.1;
-        if (key.getModifiers().isShiftDown())
-            step *= 10.0;
-
-        slider->setValue (slider->getValue() + (up ? step : -step), juce::sendNotificationSync);
-        return true;
-    }
-
-    /** Ensure Enter-default (or first) Alert button actually has keyboard focus. */
-    void focusDefaultAlertButton (juce::AlertWindow& aw)
-    {
-        juce::Button* fallback = nullptr;
-
-        for (int i = 0; i < aw.getNumButtons(); ++i)
-        {
-            auto* b = aw.getButton (i);
-            if (b == nullptr)
-                continue;
-
-            if (fallback == nullptr)
-                fallback = b;
-
-            if (b->isRegisteredForShortcut (juce::KeyPress (juce::KeyPress::returnKey)))
-            {
-                b->grabKeyboardFocus();
-                return;
-            }
-        }
-
-        if (fallback != nullptr)
-            fallback->grabKeyboardFocus();
-    }
-
-    void showAlertAndFocusDefault (juce::AlertWindow* aw, juce::ModalComponentManager::Callback* callback)
-    {
-        aw->enterModalState (true, callback, true);
-        // Peer / modal focus transfer may run after this call — re-assert on next tick.
-        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::AlertWindow> (aw)] {
-            if (safe != nullptr)
-                focusDefaultAlertButton (*safe);
-        });
-    }
-
-    int nearestBufferSize (const juce::Array<int>& sizes, int preferred)
-    {
-        if (sizes.isEmpty())
-            return preferred;
-
-        int best = sizes.getUnchecked (0);
-        int bestDist = std::abs (best - preferred);
-
-        for (auto size : sizes)
-        {
-            const int dist = std::abs (size - preferred);
-            if (dist < bestDist || (dist == bestDist && size < best))
-            {
-                best = size;
-                bestDist = dist;
-            }
-        }
-
-        return best;
+       #if JUCE_WINDOWS
+        return typeName == preferred;
+       #else
+        return typeName.containsIgnoreCase (preferred);
+       #endif
     }
 }
+
 
 MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* progress)
     : menuBar (this),
@@ -428,6 +54,8 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
       startupProjectPath (std::move (projectPathToOpen)),
       mixer (engine, *this)
 {
+    engineButton.setButtonText (jp (u8"オーディオ停止"));
+    addTrackButton.setButtonText (jp (u8"トラック追加"));
     setLookAndFeel (&lookAndFeel);
     juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
     setOpaque (true);
@@ -590,10 +218,10 @@ void MainComponent::resized()
 
 bool MainComponent::keyPressed (const juce::KeyPress& key)
 {
-    if (forwardTabToAppModal (*this, key))
+    if (AppModalDialog::forwardTabToAppModal (*this, key))
         return true;
 
-    if (nudgeFocusedSlider (key))
+    if (AppModalDialog::nudgeFocusedSlider (key))
         return true;
 
     if (! key.getModifiers().isCommandDown() || key.getModifiers().isAltDown())
@@ -763,11 +391,6 @@ void MainComponent::timerCallback()
         controlSurface.refreshFeedback();
 }
 
-juce::File MainComponent::getDefaultProjectsDir() const
-{
-    return AppPaths::defaultProjectsDirectory();
-}
-
 void MainComponent::setScanStatus (const juce::String& text)
 {
     scanStatus = text;
@@ -798,14 +421,7 @@ void MainComponent::scanFinished (int failedCount)
 void MainComponent::applyFirstRunAudioDefaults()
 {
     const auto& types = deviceManager.getAvailableDeviceTypes();
-    const juce::String preferred =
-       #if JUCE_WINDOWS
-        "ASIO";
-       #elif JUCE_MAC
-        "CoreAudio";
-       #else
-        {};
-       #endif
+    const auto preferred = preferredAudioDeviceTypeHint();
 
     if (preferred.isNotEmpty())
         for (auto* type : types)
@@ -818,7 +434,7 @@ void MainComponent::applyFirstRunAudioDefaults()
     auto setup = deviceManager.getAudioDeviceSetup();
     if (auto* device = deviceManager.getCurrentAudioDevice())
     {
-        setup.bufferSize = nearestBufferSize (device->getAvailableBufferSizes(), preferredBufferSize);
+        setup.bufferSize = AppModalDialog::nearestBufferSize (device->getAvailableBufferSizes(), preferredBufferSize);
         deviceManager.setAudioDeviceSetup (setup, true);
     }
     else
@@ -877,16 +493,7 @@ void MainComponent::showAudioSettings()
 {
     auto selector = std::make_unique<juce::AudioDeviceSelectorComponent> (deviceManager, 0, 64, 2, 8, true, false, true, false);
     selector->setSize (560, 520);
-
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (selector.release());
-    options.dialogTitle = jp (u8"オーディオ / MIDI 設定");
-    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.componentToCentreAround = this;
-    options.resizable = true;
-    launchAppDialog (options);
+    AppModalDialog::launchPanel (this, std::move (selector), jp (u8"オーディオ / MIDI 設定"), true);
 }
 
 void MainComponent::markSetupWizardCompleted()
@@ -902,7 +509,7 @@ bool MainComponent::masterHasSyncRoom() const
 
 bool MainComponent::findSyncRoomPluginDescription (juce::PluginDescription& out) const
 {
-    return SyncRoomFinder::findDescription (knownPlugins, formatManager, buildScanPaths(), out);
+    return SyncRoomFinder::findDescription (knownPlugins, formatManager, PluginScanCoordinator::buildPaths (formatManager, appSettings.extraVstPaths), out);
 }
 
 bool MainComponent::maybeAutoCreateStarterMonoTrack()
@@ -910,15 +517,8 @@ bool MainComponent::maybeAutoCreateStarterMonoTrack()
     if (! engine.tracks().empty())
         return false;
 
-   #if JUCE_WINDOWS
-    if (deviceManager.getCurrentAudioDeviceType() != "ASIO")
+    if (! isPreferredAudioDeviceType (deviceManager.getCurrentAudioDeviceType()))
         return false;
-   #elif JUCE_MAC
-    if (! deviceManager.getCurrentAudioDeviceType().containsIgnoreCase ("CoreAudio"))
-        return false;
-   #else
-    return false;
-   #endif
 
     auto* device = deviceManager.getCurrentAudioDevice();
     if (device == nullptr)
@@ -971,24 +571,14 @@ void MainComponent::finishSetupWizardSession (bool allowStarterTrackAutoCreate)
 void MainComponent::showSetupWizard (bool allowStarterTrackAutoCreate)
 {
     juce::StringArray defaults;
-    const auto path = defaultVst3ScanPaths();
+    const auto path = PluginScanCoordinator::defaultPaths (formatManager);
     for (int p = 0; p < path.getNumPaths(); ++p)
         defaults.add (path[p].getFullPathName());
 
     auto panel = std::make_unique<SetupWizardPanel> (deviceManager, defaults, appSettings.extraVstPaths);
     auto* panelPtr = panel.get();
     panel->setSize (640, 580);
-
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (panel.release());
-    options.dialogTitle = jp (u8"セットアップウィザード");
-    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.componentToCentreAround = this;
-    options.resizable = true;
-
-    auto* window = launchAppDialog (options);
+    auto* window = AppModalDialog::launchPanel (this, std::move (panel), jp (u8"セットアップウィザード"), true);
     panelPtr->onFinished = [this, window, allowStarterTrackAutoCreate] {
         markSetupWizardCompleted();
         if (auto xml = deviceManager.createStateXml())
@@ -1009,7 +599,7 @@ void MainComponent::showSetupWizard (bool allowStarterTrackAutoCreate)
         appSettings.extraVstPaths = std::move (extras);
         saveAppSettings();
         if (startScan)
-            startPluginScan (buildScanPaths());
+            startPluginScan (PluginScanCoordinator::buildPaths (formatManager, appSettings.extraVstPaths));
     };
     panelPtr->onTryInsertSyncRoom = [this]() -> bool {
         if (masterHasSyncRoom())
@@ -1044,17 +634,7 @@ void MainComponent::showSurfaceSettings()
     auto panel = std::make_unique<SurfaceSettingsPanel> (controlSurface);
     auto* panelPtr = panel.get();
     panel->setSize (520, 300);
-
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (panel.release());
-    options.dialogTitle = jp (u8"コントロールサーフェス");
-    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.componentToCentreAround = this;
-    options.resizable = false;
-
-    auto* window = launchAppDialog (options);
+    auto* window = AppModalDialog::launchPanel (this, std::move (panel), jp (u8"コントロールサーフェス"), false);
     panelPtr->onClose = [window] {
         if (window != nullptr)
             window->exitModalState (0);
@@ -1070,17 +650,7 @@ void MainComponent::showMidiLearnSettings()
     auto panel = std::make_unique<MidiLearnSettingsPanel> (midiLearn);
     auto* panelPtr = panel.get();
     panel->setSize (520, 280);
-
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (panel.release());
-    options.dialogTitle = jp (u8"MIDI 学習");
-    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.componentToCentreAround = this;
-    options.resizable = false;
-
-    auto* window = launchAppDialog (options);
+    auto* window = AppModalDialog::launchPanel (this, std::move (panel), jp (u8"MIDI 学習"), false);
     panelPtr->onClose = [window] {
         if (window != nullptr)
             window->exitModalState (0);
@@ -1096,17 +666,7 @@ void MainComponent::showOptionsGeneral()
     auto panel = std::make_unique<OptionsGeneralPanel> (mixer.getExclusiveSoloMode());
     auto* panelPtr = panel.get();
     panel->setSize (480, 200);
-
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (panel.release());
-    options.dialogTitle = jp (u8"一般");
-    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.componentToCentreAround = this;
-    options.resizable = false;
-
-    auto* window = launchAppDialog (options);
+    auto* window = AppModalDialog::launchPanel (this, std::move (panel), jp (u8"一般"), false);
     panelPtr->onClose = [window] {
         if (window != nullptr)
             window->exitModalState (0);
@@ -1153,37 +713,17 @@ void MainComponent::showLearnMenuForTrack (int trackIndex, MidiLearnTarget targe
                         });
 }
 
-juce::FileSearchPath MainComponent::defaultVst3ScanPaths() const
-{
-    return PluginScanCoordinator::defaultPaths (formatManager);
-}
-
-juce::FileSearchPath MainComponent::buildScanPaths() const
-{
-    return PluginScanCoordinator::buildPaths (formatManager, appSettings.extraVstPaths);
-}
-
 void MainComponent::showScanDialog()
 {
     juce::StringArray defaults;
-    const auto path = defaultVst3ScanPaths();
+    const auto path = PluginScanCoordinator::defaultPaths (formatManager);
     for (int p = 0; p < path.getNumPaths(); ++p)
         defaults.add (path[p].getFullPathName());
 
     auto panel = std::make_unique<ScanFolderPanel> (defaults, appSettings.extraVstPaths);
     auto* panelPtr = panel.get();
     panel->setSize (560, 360);
-
-    juce::DialogWindow::LaunchOptions options;
-    options.content.setOwned (panel.release());
-    options.dialogTitle = jp (u8"VST3 スキャン");
-    options.dialogBackgroundColour = juce::Colour (LiteLookAndFeel::surface);
-    options.escapeKeyTriggersCloseButton = true;
-    options.useNativeTitleBar = false;
-    options.componentToCentreAround = this;
-    options.resizable = true;
-
-    auto* window = launchAppDialog (options);
+    auto* window = AppModalDialog::launchPanel (this, std::move (panel), jp (u8"VST3 スキャン"), true);
     panelPtr->onClose = [window] {
         if (window != nullptr)
             window->exitModalState (0);
@@ -1193,7 +733,7 @@ void MainComponent::showScanDialog()
         saveAppSettings();
         if (window != nullptr)
             window->exitModalState (1);
-        startPluginScan (buildScanPaths());
+        startPluginScan (PluginScanCoordinator::buildPaths (formatManager, appSettings.extraVstPaths));
     };
 }
 
@@ -1675,7 +1215,7 @@ bool MainComponent::requestQuit()
     aw->addButton (jp (u8"キャンセル"), 0,
                    juce::KeyPress (juce::KeyPress::escapeKey));
 
-    showAlertAndFocusDefault (aw, juce::ModalCallbackFunction::create (
+    AppModalDialog::showAlertAndFocusDefault (aw, juce::ModalCallbackFunction::create (
                                    [safe = juce::Component::SafePointer<MainComponent> (this), beginQuit] (int result) {
                                        if (safe == nullptr)
                                            return;
@@ -1804,278 +1344,15 @@ void MainComponent::saveAppSettings()
     appSettings.save (engine, controlSurface, midiLearn);
 }
 
-void MainComponent::rememberProject (const juce::File& file)
-{
-    appSettings.rememberProject (file);
-    if (! file.existsAsFile())
-        return;
-
-    saveAppSettings();
-    updateWindowTitle();
-    menuItemsChanged();
-}
-
-void MainComponent::updateWindowTitle()
-{
-    juce::String titleText = "LiteHost";
-    if (appSettings.currentProject != juce::File())
-        titleText << " - " << appSettings.currentProject.getFileName();
-    if (projectDirty)
-        titleText = "* " + titleText;
-
-    if (auto* top = getTopLevelComponent())
-        if (auto* window = dynamic_cast<juce::DocumentWindow*> (top))
-            window->setName (titleText);
-}
-
 void MainComponent::projectEdited()
 {
     markProjectDirty();
-}
-
-void MainComponent::markProjectDirty()
-{
-    if (suppressProjectDirty)
-        return;
-
-    if (! projectDirty)
-    {
-        projectDirty = true;
-        updateWindowTitle();
-    }
-}
-
-void MainComponent::clearProjectDirty()
-{
-    if (! projectDirty)
-        return;
-
-    projectDirty = false;
-    updateWindowTitle();
-}
-
-void MainComponent::promptIfProjectDirty (std::function<void()> proceed)
-{
-    if (! projectDirty)
-    {
-        proceed();
-        return;
-    }
-
-    auto* aw = new juce::AlertWindow ("LiteHost",
-                                      jp (u8"プロジェクトに保存されていない変更があります。"),
-                                      juce::MessageBoxIconType::QuestionIcon,
-                                      this);
-    aw->addButton (jp (u8"保存"), 1,
-                   juce::KeyPress (juce::KeyPress::returnKey));
-    aw->addButton (jp (u8"破棄"), 2);
-    aw->addButton (jp (u8"キャンセル"), 0,
-                   juce::KeyPress (juce::KeyPress::escapeKey));
-
-    showAlertAndFocusDefault (aw, juce::ModalCallbackFunction::create (
-                                   [safe = juce::Component::SafePointer<MainComponent> (this), proceed] (int result) {
-                                       if (safe == nullptr)
-                                           return;
-
-                                       if (result == 2)
-                                       {
-                                           proceed();
-                                           return;
-                                       }
-
-                                       if (result != 1)
-                                           return;
-
-                                       if (safe->appSettings.currentProject != juce::File()
-                                           && safe->appSettings.currentProject.hasWriteAccess())
-                                       {
-                                           if (safe->saveProjectFile (safe->appSettings.currentProject))
-                                               proceed();
-                                       }
-                                       else
-                                       {
-                                           safe->saveProjectAsThen (proceed);
-                                       }
-                                   }));
-}
-
-void MainComponent::clearProjectState()
-{
-    editorWindows.clear();
-    strips.clear();
-    trackList.removeAllChildren();
-
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        engine.clearTracksAndMaster();
-    }
-
-    if (masterStrip != nullptr)
-        masterStrip->refreshPlugins();
-
-    trackSerial = 1;
-}
-
-void MainComponent::ensureDefaultTrack()
-{
-    if (! engine.tracks().empty())
-        return;
-
-    const juce::ScopedLock sl (engine.getCallbackLock());
-    engine.addTrack (jp (u8"トラック ") + juce::String (trackSerial++));
 }
 
 void MainComponent::reportStartup (const juce::String& text, double progress01)
 {
     if (startupProgress != nullptr)
         startupProgress->setStatus (text, progress01);
-}
-
-bool MainComponent::loadProjectFile (const juce::File& file)
-{
-    auto xml = juce::XmlDocument::parse (file);
-    if (xml == nullptr || xml->getTagName() != "LITEHOST")
-        return false;
-
-    const int pluginTotal = ProjectStore::countPlugins (*xml);
-    // Only use the startup splash during app launch. Creating another top-level
-    // "LiteHost" window mid-session races the main window and can crash on reload.
-    StartupProgress* progress = startupProgress;
-    if (progress == nullptr && pluginTotal > 0)
-        status.setText (jp (u8"プロジェクトを開いています: ") + file.getFileName(),
-                        juce::dontSendNotification);
-
-    if (progress != nullptr)
-        progress->setStatus (jp (u8"プロジェクトを開いています: ") + file.getFileName(), 0.30);
-
-    suppressProjectDirty = true;
-
-    // Stop audio before tearing down plugins / tracks (callback may still be running).
-    CrashLog::write ("loadProject closeAudioDevice " + file.getFileName());
-    deviceManager.closeAudioDevice();
-    clearProjectState();
-
-    std::vector<juce::AudioPluginInstance*> delayedArm;
-    ProjectStore::loadIntoEngine (*xml, engine, trackSerial, delayedArm,
-                                  [this] (PluginChain& chain, const PluginChain::PluginLoadRequest& request, bool suspendBeforePrepare) {
-                                      CrashLog::write ("load plugin " + request.description.name);
-                                      return loadPluginIntoChain (chain, request, suspendBeforePrepare);
-                                  },
-                                  progress);
-
-    ensureDefaultTrack();
-    syncTrackMidiInputs();
-    rememberProject (file);
-    rebuildStrips();
-
-    CrashLog::write ("loadProject restart audio delayed=" + juce::String ((int) delayedArm.size()));
-    if (progress != nullptr)
-        progress->setStatus (jp (u8"オーディオを再開しています..."), 0.94);
-    else if (pluginTotal > 0)
-        status.setText (jp (u8"オーディオを再開しています..."), juce::dontSendNotification);
-
-    deviceManager.restartLastAudioDevice();
-
-    for (auto* plugin : delayedArm)
-        armPluginAfterLaunch (plugin);
-
-    CrashLog::write ("loadProject done " + file.getFileName());
-    suppressProjectDirty = false;
-    clearProjectDirty();
-    status.setText (makeStatusText(), juce::dontSendNotification);
-    return true;
-}
-
-bool MainComponent::saveProjectFile (const juce::File& file)
-{
-    if (! ProjectStore::saveToFile (file, engine))
-        return false;
-
-    rememberProject (file);
-    clearProjectDirty();
-    return true;
-}
-
-void MainComponent::newProject()
-{
-    suppressProjectDirty = true;
-    deviceManager.closeAudioDevice();
-    clearProjectState();
-    appSettings.currentProject = juce::File();
-    ensureDefaultTrack();
-    rebuildStrips();
-    deviceManager.restartLastAudioDevice();
-    saveAppSettings();
-    suppressProjectDirty = false;
-    clearProjectDirty();
-    updateWindowTitle();
-}
-
-void MainComponent::openProject()
-{
-    auto chooser = std::make_shared<juce::FileChooser> (jp (u8"プロジェクトを開く"),
-                                                        appSettings.currentProject.existsAsFile() ? appSettings.currentProject.getParentDirectory()
-                                                                                      : getDefaultProjectsDir(),
-                                                        "*.litehost;*.xml");
-    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this, chooser] (const juce::FileChooser& fc) {
-                              auto file = fc.getResult();
-                              if (file.existsAsFile() && ! loadProjectFile (file))
-                                  juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
-                                                                          jp (u8"プロジェクトを開けませんでした。"));
-                          });
-}
-
-void MainComponent::saveProject()
-{
-    if (appSettings.currentProject == juce::File() || ! appSettings.currentProject.hasWriteAccess())
-    {
-        saveProjectAs();
-        return;
-    }
-
-    if (! saveProjectFile (appSettings.currentProject))
-        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
-                                                jp (u8"プロジェクトの保存に失敗しました。"));
-}
-
-void MainComponent::saveProjectAs()
-{
-    saveProjectAsThen ({});
-}
-
-void MainComponent::saveProjectAsThen (std::function<void()> afterSave)
-{
-    auto chooser = std::make_shared<juce::FileChooser> (jp (u8"名前を付けて保存"),
-                                                        getDefaultProjectsDir().getChildFile ("Untitled.litehost"),
-                                                        "*.litehost");
-    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this, chooser, afterSave] (const juce::FileChooser& fc) {
-                              auto file = fc.getResult();
-                              if (file == juce::File())
-                                  return;
-                              if (! file.hasFileExtension (".litehost"))
-                                  file = file.withFileExtension (".litehost");
-                              if (! saveProjectFile (file))
-                              {
-                                  juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
-                                                                          jp (u8"プロジェクトの保存に失敗しました。"));
-                                  return;
-                              }
-                              if (afterSave)
-                                  afterSave();
-                          });
-}
-
-void MainComponent::openRecentProject (int index)
-{
-    if (! juce::isPositiveAndBelow (index, appSettings.recentProjects.size()))
-        return;
-
-    const auto file = appSettings.recentProjects.getReference (index);
-    if (! loadProjectFile (file))
-        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
-                                                jp (u8"プロジェクトを開けませんでした。"));
 }
 
 void MainComponent::saveAll()

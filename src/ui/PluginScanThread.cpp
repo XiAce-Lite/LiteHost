@@ -1,5 +1,4 @@
 #include "PluginScanThread.h"
-#include "MainComponent.h"
 #include "Utf8.h"
 #include "app/AppPaths.h"
 #include "app/ScanUiSuppressor.h"
@@ -32,7 +31,7 @@ namespace
     };
 }
 
-PluginScanThread::PluginScanThread (MainComponent& ownerIn,
+PluginScanThread::PluginScanThread (MixerStripHost& ownerIn,
                                     juce::KnownPluginList& list,
                                     juce::AudioPluginFormat& format,
                                     juce::FileSearchPath pathsIn)
@@ -77,9 +76,11 @@ void PluginScanThread::run()
             continue;
         }
 
-        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (&owner), name] {
+        auto* hostPtr = &owner;
+        juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::Component> (owner.asComponent()),
+                                          hostPtr, name] {
             if (safe != nullptr)
-                safe->setScanStatus (jp (u8"スキャン中: ") + name);
+                hostPtr->setScanStatus (jp (u8"スキャン中: ") + name);
         });
     }
 
@@ -90,8 +91,10 @@ void PluginScanThread::run()
     SetErrorMode (previousErrorMode);
    #endif
 
-    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<MainComponent> (&owner), failed] {
+    auto* hostPtr = &owner;
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::Component> (owner.asComponent()),
+                                      hostPtr, failed] {
         if (safe != nullptr)
-            safe->scanFinished (failed);
+            hostPtr->scanFinished (failed);
     });
 }
