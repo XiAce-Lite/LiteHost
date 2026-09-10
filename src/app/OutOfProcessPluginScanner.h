@@ -1,35 +1,47 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <functional>
 
-/** Loads plugin metadata via LiteHostScanner child process over localhost TCP.
-    A crashing / hung plugin kills only the child; the host continues. */
-class OutOfProcessPluginScanner final : public juce::KnownPluginList::CustomScanner
+/** Talks to one LiteHostScanner child over localhost TCP. */
+class OutOfProcessPluginScanner
 {
 public:
+    enum class Outcome
+    {
+        ok,     // probed (may still yield zero types)
+        failed  // timeout / crash / soft fail — caller should blacklist
+    };
+
+    using WaitTickFn = std::function<void (const juce::String& fileOrIdentifier, int waitedMs, int timeoutMs)>;
+
     explicit OutOfProcessPluginScanner (juce::File scannerExecutable);
-    ~OutOfProcessPluginScanner() override;
+    ~OutOfProcessPluginScanner();
 
-    bool findPluginTypesFor (juce::AudioPluginFormat& format,
-                             juce::OwnedArray<juce::PluginDescription>& result,
-                             const juce::String& fileOrIdentifier) override;
+    void setWaitTickHandler (WaitTickFn handler) { onWaitTick = std::move (handler); }
 
-    void scanFinished() override;
+    bool scannerAvailable() const { return scannerExe.existsAsFile(); }
+
+    Outcome scanFile (const juce::String& fileOrIdentifier,
+                      juce::OwnedArray<juce::PluginDescription>& result);
+
+    void shutdown();
+
+    static bool isLikelyCompatibleVst3 (const juce::String& fileOrIdentifier);
 
 private:
     bool ensureChild();
-    void stopChild();
+    void stopChild (bool polite);
+    void killChildNow();
     bool writeLine (const juce::String& line);
-    bool readLine (juce::String& line, int timeoutMs);
+    bool readLine (juce::String& line, int timeoutMs, const juce::String& waitingFor);
     bool readChildStdoutLine (juce::String& line, int timeoutMs);
-    bool scanInProcess (juce::AudioPluginFormat& format,
-                        juce::OwnedArray<juce::PluginDescription>& result,
-                        const juce::String& fileOrIdentifier);
 
     juce::File scannerExe;
     std::unique_ptr<juce::ChildProcess> child;
     std::unique_ptr<juce::StreamingSocket> socket;
     juce::MemoryBlock stdoutBuffer;
-    static constexpr int perPluginTimeoutMs = 15000;
-    static constexpr int startupTimeoutMs = 15000;
+    WaitTickFn onWaitTick;
+    static constexpr int perPluginTimeoutMs = 3000;
+    static constexpr int startupTimeoutMs = 8000;
 };

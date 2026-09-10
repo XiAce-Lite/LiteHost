@@ -8,6 +8,8 @@
 
 #if JUCE_WINDOWS
  #include <windows.h>
+#else
+ #include <unistd.h>
 #endif
 
 namespace
@@ -62,14 +64,32 @@ namespace
         return false;
     }
 
+    void abortProcessHard()
+    {
+       #if JUCE_WINDOWS
+        ::TerminateProcess (::GetCurrentProcess(), 42);
+       #else
+        _exit (42);
+       #endif
+    }
+
     void scanOneOnMessageThread (juce::AudioPluginFormat& format,
                                  juce::StreamingSocket& socket,
                                  const juce::String& path)
     {
         juce::OwnedArray<juce::PluginDescription> types;
         juce::String failReason;
+        std::atomic<bool> done { false };
 
-        // Many VST3s expect a living message thread while probing.
+        // If findAllTypesForFile wedges the message thread, parent kill may lag —
+        // self-exit so the TCP session drops and the host can continue.
+        std::thread watchdog ([&done] {
+            for (int i = 0; i < 28 && ! done.load (std::memory_order_relaxed); ++i)
+                juce::Thread::sleep (100);
+            if (! done.load (std::memory_order_relaxed))
+                abortProcessHard();
+        });
+
         juce::MessageManager::callSync ([&] {
             try
             {
@@ -80,6 +100,9 @@ namespace
                 failReason = "exception";
             }
         });
+
+        done.store (true, std::memory_order_relaxed);
+        watchdog.join();
 
         if (failReason.isNotEmpty())
             writeLine (socket, PluginScanIpc::makeFailReply (failReason));

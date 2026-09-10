@@ -8,25 +8,36 @@ OutOfProcessPluginScanner::OutOfProcessPluginScanner (juce::File scannerExecutab
 
 OutOfProcessPluginScanner::~OutOfProcessPluginScanner()
 {
-    stopChild();
+    stopChild (true);
 }
 
-void OutOfProcessPluginScanner::scanFinished()
+void OutOfProcessPluginScanner::shutdown()
 {
-    stopChild();
+    stopChild (true);
 }
 
-void OutOfProcessPluginScanner::stopChild()
+void OutOfProcessPluginScanner::killChildNow()
 {
-    if (socket != nullptr && socket->isConnected())
+    socket.reset();
+
+    if (child != nullptr && child->isRunning())
+        child->kill();
+
+    child.reset();
+    stdoutBuffer.reset();
+}
+
+void OutOfProcessPluginScanner::stopChild (bool polite)
+{
+    if (polite && socket != nullptr && socket->isConnected())
         writeLine (PluginScanIpc::quitCommand);
 
     socket.reset();
 
     if (child != nullptr)
     {
-        if (child->isRunning())
-            child->waitForProcessToFinish (2000);
+        if (polite && child->isRunning())
+            child->waitForProcessToFinish (500);
 
         if (child->isRunning())
             child->kill();
@@ -36,10 +47,38 @@ void OutOfProcessPluginScanner::stopChild()
     stdoutBuffer.reset();
 }
 
+bool OutOfProcessPluginScanner::isLikelyCompatibleVst3 (const juce::String& fileOrIdentifier)
+{
+    const juce::File file (fileOrIdentifier);
+    if (! file.isDirectory() || ! file.hasFileExtension (".vst3"))
+        return true;
+
+    const auto contents = file.getChildFile ("Contents");
+    if (! contents.isDirectory())
+        return true;
+
+   #if JUCE_WINDOWS && JUCE_64BIT
+    if (contents.getChildFile ("x86_64-win").isDirectory())
+        return true;
+    if (contents.getChildFile ("arm64ec-win").isDirectory())
+        return true;
+    if (contents.getChildFile ("x86-win").isDirectory())
+        return false;
+   #elif JUCE_WINDOWS
+    if (contents.getChildFile ("x86-win").isDirectory())
+        return true;
+    if (contents.getChildFile ("x86_64-win").isDirectory())
+        return false;
+   #endif
+
+    return true;
+}
+
 bool OutOfProcessPluginScanner::readChildStdoutLine (juce::String& line, int timeoutMs)
 {
     line.clear();
-    const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) juce::jmax (1, timeoutMs);
+    const auto start = juce::Time::getMillisecondCounter();
+    const auto deadline = start + (juce::uint32) juce::jmax (1, timeoutMs);
 
     while (juce::Time::getMillisecondCounter() < deadline)
     {
@@ -59,7 +98,7 @@ bool OutOfProcessPluginScanner::readChildStdoutLine (juce::String& line, int tim
             }
         }
 
-        if (child == nullptr)
+        if (child == nullptr || ! child->isRunning())
             return false;
 
         char chunk[256];
@@ -69,9 +108,6 @@ bool OutOfProcessPluginScanner::readChildStdoutLine (juce::String& line, int tim
             stdoutBuffer.append (chunk, (size_t) got);
             continue;
         }
-
-        if (! child->isRunning())
-            return false;
 
         juce::Thread::sleep (5);
     }
@@ -85,7 +121,7 @@ bool OutOfProcessPluginScanner::ensureChild()
         && socket != nullptr && socket->isConnected())
         return true;
 
-    stopChild();
+    stopChild (false);
 
     if (! scannerExe.existsAsFile())
         return false;
@@ -101,7 +137,7 @@ bool OutOfProcessPluginScanner::ensureChild()
     if (! readChildStdoutLine (portLine, startupTimeoutMs)
         || ! portLine.startsWith (PluginScanIpc::portPrefix))
     {
-        stopChild();
+        killChildNow();
         return false;
     }
 
@@ -110,14 +146,14 @@ bool OutOfProcessPluginScanner::ensureChild()
                          .getIntValue();
     if (port <= 0)
     {
-        stopChild();
+        killChildNow();
         return false;
     }
 
     socket = std::make_unique<juce::StreamingSocket>();
     if (! socket->connect ("127.0.0.1", port, startupTimeoutMs))
     {
-        stopChild();
+        killChildNow();
         return false;
     }
 
@@ -135,88 +171,89 @@ bool OutOfProcessPluginScanner::writeLine (const juce::String& line)
     return socket->write (data, bytes) == bytes;
 }
 
-bool OutOfProcessPluginScanner::readLine (juce::String& line, int timeoutMs)
+bool OutOfProcessPluginScanner::readLine (juce::String& line, int timeoutMs, const juce::String& waitingFor)
 {
     line.clear();
     if (socket == nullptr)
         return false;
 
     juce::MemoryOutputStream buffer;
-    const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) juce::jmax (1, timeoutMs);
+    const auto start = juce::Time::getMillisecondCounter();
+    const auto deadline = start + (juce::uint32) juce::jmax (1, timeoutMs);
+    int lastTickSec = -1;
 
     while (juce::Time::getMillisecondCounter() < deadline)
     {
         if (child != nullptr && ! child->isRunning())
             return false;
 
-        char c = 0;
-        const int got = socket->read (&c, 1, false);
+        const int waited = (int) (juce::Time::getMillisecondCounter() - start);
+        const int sec = waited / 1000;
+        if (onWaitTick && sec != lastTickSec)
+        {
+            lastTickSec = sec;
+            onWaitTick (waitingFor, waited, timeoutMs);
+        }
+
+        const int ready = socket->waitUntilReady (true, 50);
+        if (ready < 0)
+            return false;
+        if (ready == 0)
+            continue;
+
+        char chunk[512];
+        const int got = socket->read (chunk, (int) sizeof (chunk), false);
         if (got < 0)
             return false;
         if (got == 0)
         {
             if (! socket->isConnected())
                 return false;
-            juce::Thread::sleep (2);
             continue;
         }
 
-        if (c == '\n')
+        for (int i = 0; i < got; ++i)
         {
-            line = buffer.toString().trimEnd();
-            return true;
+            const char c = chunk[i];
+            if (c == '\n')
+            {
+                line = buffer.toString().trimEnd();
+                return true;
+            }
+            if (c != '\r')
+                buffer.writeByte ((juce::uint8) c);
         }
-
-        if (c != '\r')
-            buffer.writeByte ((juce::uint8) c);
     }
 
     return false;
 }
 
-bool OutOfProcessPluginScanner::scanInProcess (juce::AudioPluginFormat& format,
-                                               juce::OwnedArray<juce::PluginDescription>& result,
-                                               const juce::String& fileOrIdentifier)
-{
-    try
-    {
-        format.findAllTypesForFile (result, fileOrIdentifier);
-        return true;
-    }
-    catch (...)
-    {
-        result.clear();
-        return false;
-    }
-}
-
-bool OutOfProcessPluginScanner::findPluginTypesFor (juce::AudioPluginFormat& format,
-                                                    juce::OwnedArray<juce::PluginDescription>& result,
-                                                    const juce::String& fileOrIdentifier)
+OutOfProcessPluginScanner::Outcome OutOfProcessPluginScanner::scanFile (
+    const juce::String& fileOrIdentifier,
+    juce::OwnedArray<juce::PluginDescription>& result)
 {
     result.clear();
 
-    if (shouldExit())
-        return false;
+    if (! isLikelyCompatibleVst3 (fileOrIdentifier))
+        return Outcome::ok; // empty — incompatible, not a crash
 
     if (! scannerExe.existsAsFile())
-        return scanInProcess (format, result, fileOrIdentifier);
+        return Outcome::failed;
 
     if (! ensureChild())
-        return scanInProcess (format, result, fileOrIdentifier);
+        return Outcome::failed;
 
     if (! writeLine (PluginScanIpc::makeScanRequest (fileOrIdentifier)))
     {
-        stopChild();
-        return false;
+        killChildNow();
+        return Outcome::failed;
     }
 
     juce::String reply;
-    if (! readLine (reply, perPluginTimeoutMs))
+    if (! readLine (reply, perPluginTimeoutMs, fileOrIdentifier))
     {
-        // Crash, hang, or broken pipe — blacklist this file and respawn later.
-        stopChild();
-        return false;
+        killChildNow();
+        return Outcome::failed;
     }
 
     if (reply.startsWith (PluginScanIpc::okPrefix))
@@ -225,11 +262,11 @@ bool OutOfProcessPluginScanner::findPluginTypesFor (juce::AudioPluginFormat& for
         if (! PluginScanIpc::decodeTypesXml (payload, result))
         {
             result.clear();
-            stopChild();
-            return false;
+            killChildNow();
+            return Outcome::failed;
         }
-        return true;
+        return Outcome::ok;
     }
 
-    return false;
+    return Outcome::failed;
 }

@@ -1255,7 +1255,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.1.5");
+                             : juce::String ("0.1.6");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {
