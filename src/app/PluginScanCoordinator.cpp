@@ -16,9 +16,10 @@ juce::FileSearchPath PluginScanCoordinator::defaultPaths (const juce::AudioPlugi
 
    #if JUCE_WINDOWS
     juce::ignoreUnused (formats);
+    // 64-bit host: only the native Program Files Common VST3 folder.
+    // Program Files (x86) holds 32-bit plugs that cannot load here and only waste scan time.
     paths.addIfNotAlreadyThere (juce::File::getSpecialLocation (juce::File::windowsProgramFilesCommon)
                                     .getChildFile ("VST3"));
-    paths.addIfNotAlreadyThere (juce::File ("C:\\Program Files (x86)\\Common Files\\VST3"));
    #elif JUCE_MAC
     juce::ignoreUnused (formats);
     paths.addIfNotAlreadyThere (juce::File ("/Library/Audio/Plug-Ins/VST3"));
@@ -51,7 +52,7 @@ juce::FileSearchPath PluginScanCoordinator::buildPaths (const juce::AudioPluginF
 juce::String PluginScanCoordinator::defaultFolderHint()
 {
    #if JUCE_WINDOWS
-    return jp (u8"標準は Common Files\\VST3 のみ。ユーザーフォルダは追加してください。");
+    return jp (u8"標準は 64bit の Common Files\\VST3 のみ（x86 フォルダは対象外）。ユーザーフォルダは追加してください。");
    #elif JUCE_MAC
     return jp (u8"標準は /Library/Audio/Plug-Ins/VST3 のみ。ユーザー領域（~/Library/...）は追加してください。");
    #else

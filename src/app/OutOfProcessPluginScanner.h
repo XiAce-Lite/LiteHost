@@ -30,6 +30,6 @@ private:
     std::unique_ptr<juce::ChildProcess> child;
     std::unique_ptr<juce::StreamingSocket> socket;
     juce::MemoryBlock stdoutBuffer;
-    static constexpr int perPluginTimeoutMs = 60000;
+    static constexpr int perPluginTimeoutMs = 15000;
     static constexpr int startupTimeoutMs = 15000;
 };

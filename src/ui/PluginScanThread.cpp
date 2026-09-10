@@ -40,11 +40,13 @@ void PluginScanThread::run()
             continue;
         }
 
+        const int percent = juce::jlimit (0, 100, (int) std::round (scanner.getProgress() * 100.0f));
         auto* hostPtr = &owner;
         juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::Component> (owner.asComponent()),
-                                          hostPtr, name] {
+                                          hostPtr, name, percent] {
             if (safe != nullptr)
-                hostPtr->setScanStatus (jp (u8"スキャン中: ") + name);
+                hostPtr->setScanStatus (jp (u8"スキャン中 (")
+                                        + juce::String (percent) + "%)  " + name);
         });
     }
 

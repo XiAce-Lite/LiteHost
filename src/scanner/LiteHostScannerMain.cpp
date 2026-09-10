@@ -2,7 +2,9 @@
 #include "PluginScanIpc.h"
 #include "app/ScanUiSuppressor.h"
 
+#include <atomic>
 #include <iostream>
+#include <thread>
 
 #if JUCE_WINDOWS
  #include <windows.h>
@@ -60,21 +62,59 @@ namespace
         return false;
     }
 
-    void scanOne (juce::AudioPluginFormat& format,
-                  juce::StreamingSocket& socket,
-                  const juce::String& path)
+    void scanOneOnMessageThread (juce::AudioPluginFormat& format,
+                                 juce::StreamingSocket& socket,
+                                 const juce::String& path)
     {
         juce::OwnedArray<juce::PluginDescription> types;
+        juce::String failReason;
 
-        try
-        {
-            format.findAllTypesForFile (types, path);
+        // Many VST3s expect a living message thread while probing.
+        juce::MessageManager::callSync ([&] {
+            try
+            {
+                format.findAllTypesForFile (types, path);
+            }
+            catch (...)
+            {
+                failReason = "exception";
+            }
+        });
+
+        if (failReason.isNotEmpty())
+            writeLine (socket, PluginScanIpc::makeFailReply (failReason));
+        else
             writeLine (socket, PluginScanIpc::makeOkReply (types));
-        }
-        catch (...)
+    }
+
+    void serveClient (juce::AudioPluginFormat& format,
+                      juce::StreamingSocket& client,
+                      std::atomic<bool>& finished)
+    {
+        const ScanUiSuppressor suppressPluginUi;
+
+        juce::String line;
+        while (readLine (client, line, 120000))
         {
-            writeLine (socket, PluginScanIpc::makeFailReply ("exception"));
+            if (line == PluginScanIpc::quitCommand)
+                break;
+
+            if (line.startsWith (PluginScanIpc::scanPrefix))
+            {
+                const auto path = line.fromFirstOccurrenceOf (PluginScanIpc::scanPrefix, false, false);
+                if (path.isNotEmpty())
+                    scanOneOnMessageThread (format, client, path);
+                else
+                    writeLine (client, PluginScanIpc::makeFailReply ("empty-path"));
+                continue;
+            }
+
+            writeLine (client, PluginScanIpc::makeFailReply ("bad-request"));
         }
+
+        finished.store (true);
+        // Wake the message loop so main can exit promptly.
+        juce::MessageManager::callAsync ([] {});
     }
 }
 
@@ -102,7 +142,6 @@ int main (int, char**)
     if (port <= 0)
         return 3;
 
-    // Announce port on stdout for the parent ChildProcess to read.
     std::cout << PluginScanIpc::portPrefix << port << std::endl;
     std::cout.flush();
 
@@ -110,26 +149,15 @@ int main (int, char**)
     if (client == nullptr || ! client->isConnected())
         return 4;
 
-    const ScanUiSuppressor suppressPluginUi;
+    std::atomic<bool> finished { false };
+    std::thread worker ([&] {
+        serveClient (*format, *client, finished);
+    });
 
-    juce::String line;
-    while (readLine (*client, line, 120000))
-    {
-        if (line == PluginScanIpc::quitCommand)
-            break;
+    // Keep dispatching while the worker probes plugins on this thread via callSync.
+    while (! finished.load())
+        juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
 
-        if (line.startsWith (PluginScanIpc::scanPrefix))
-        {
-            const auto path = line.fromFirstOccurrenceOf (PluginScanIpc::scanPrefix, false, false);
-            if (path.isNotEmpty())
-                scanOne (*format, *client, path);
-            else
-                writeLine (*client, PluginScanIpc::makeFailReply ("empty-path"));
-            continue;
-        }
-
-        writeLine (*client, PluginScanIpc::makeFailReply ("bad-request"));
-    }
-
+    worker.join();
     return 0;
 }
