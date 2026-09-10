@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(LiteHost VERSION 0.1.3 LANGUAGES C CXX)
+project(LiteHost VERSION 0.1.4 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,7 +24,7 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(LiteHost
     PRODUCT_NAME "LiteHost"
-    VERSION "0.1.3"
+    VERSION "0.1.4"
     COMPANY_NAME "LiteHost"
     BUNDLE_ID com.litehost.app
     ICON_BIG "${CMAKE_SOURCE_DIR}/assets/icon.png"
@@ -58,6 +58,9 @@ target_sources(LiteHost PRIVATE
     src/app/PluginScanCoordinator.cpp
     src/app/ScanUiSuppressor.h
     src/app/ScanUiSuppressor.cpp
+    src/app/OutOfProcessPluginScanner.h
+    src/app/OutOfProcessPluginScanner.cpp
+    src/scanner/PluginScanIpc.h
     src/session/MixerSession.h
     src/session/MixerSession.cpp
     src/audio/PluginChain.h
@@ -143,4 +146,72 @@ target_link_libraries(LiteHost PRIVATE
     juce::juce_audio_utils
     juce::juce_dsp
     juce::juce_recommended_config_flags
+)
+
+# ---------------------------------------------------------------------------
+# LiteHostScanner — out-of-process VST3 probe (crash-isolated)
+# ---------------------------------------------------------------------------
+juce_add_console_app(LiteHostScanner
+    PRODUCT_NAME "LiteHostScanner"
+    VERSION "0.1.4"
+    COMPANY_NAME "LiteHost"
+    BUNDLE_ID com.litehost.scanner
+    NEEDS_WEB_BROWSER FALSE
+    NEEDS_CURL FALSE
+)
+
+juce_generate_juce_header(LiteHostScanner)
+
+target_sources(LiteHostScanner PRIVATE
+    src/scanner/LiteHostScannerMain.cpp
+    src/scanner/PluginScanIpc.h
+    src/app/ScanUiSuppressor.h
+    src/app/ScanUiSuppressor.cpp
+)
+
+target_include_directories(LiteHostScanner PRIVATE src)
+
+target_compile_definitions(LiteHostScanner PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_VST3=1
+    JUCE_PLUGINHOST_VST=0
+    JUCE_REPORT_APP_USAGE=0
+    JUCE_MODAL_LOOPS_PERMITTED=0
+    JUCE_VST3_HOST_CROSS_PLATFORM_UID=1
+    JUCE_STRICT_REFCOUNTEDPOINTER=1
+)
+
+if(WIN32)
+    target_compile_definitions(LiteHostScanner PRIVATE
+        JUCE_WASAPI=0
+        JUCE_DIRECTSOUND=0
+        JUCE_ASIO=0
+    )
+endif()
+
+if(APPLE)
+    target_compile_definitions(LiteHostScanner PRIVATE
+        JUCE_PLUGINHOST_AU=0
+        JUCE_COREAUDIO=0
+    )
+endif()
+
+if(MSVC)
+    target_compile_options(LiteHostScanner PRIVATE /utf-8 /W3)
+endif()
+
+target_link_libraries(LiteHostScanner PRIVATE
+    juce::juce_audio_utils
+    juce::juce_recommended_config_flags
+)
+
+add_dependencies(LiteHost LiteHostScanner)
+
+# Ship scanner next to the host (Windows dir / macOS Contents/MacOS).
+add_custom_command(TARGET LiteHost POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:LiteHostScanner>
+        $<TARGET_FILE_DIR:LiteHost>
+    COMMENT "Copy LiteHostScanner next to LiteHost"
 )

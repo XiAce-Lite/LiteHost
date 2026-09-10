@@ -24,4 +24,9 @@ if [[ ! -d "$APP" ]]; then
     exit 1
 fi
 
+SCANNER="$APP/Contents/MacOS/LiteHostScanner"
+if [[ ! -x "$SCANNER" ]]; then
+    echo "警告: LiteHostScanner が app 内にありません（VST3 スキャンはプロセス内フォールバックになります）: $SCANNER" >&2
+fi
+
 echo "OK: $APP"

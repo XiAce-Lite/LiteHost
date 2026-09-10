@@ -1,35 +1,7 @@
 #include "PluginScanThread.h"
 #include "Utf8.h"
 #include "app/AppPaths.h"
-#include "app/ScanUiSuppressor.h"
-
-#if JUCE_WINDOWS
- #include <windows.h>
-#endif
-
-namespace
-{
-    /** Load plugins without surfacing UI; failures blacklist silently and do not abort the scan. */
-    class SilentPluginScanner final : public juce::KnownPluginList::CustomScanner
-    {
-    public:
-        bool findPluginTypesFor (juce::AudioPluginFormat& format,
-                                 juce::OwnedArray<juce::PluginDescription>& result,
-                                 const juce::String& fileOrIdentifier) override
-        {
-            try
-            {
-                format.findAllTypesForFile (result, fileOrIdentifier);
-                return true;
-            }
-            catch (...)
-            {
-                result.clear();
-                return false;
-            }
-        }
-    };
-}
+#include "app/OutOfProcessPluginScanner.h"
 
 PluginScanThread::PluginScanThread (MixerStripHost& ownerIn,
                                     juce::KnownPluginList& list,
@@ -45,16 +17,8 @@ PluginScanThread::PluginScanThread (MixerStripHost& ownerIn,
 
 void PluginScanThread::run()
 {
-    // IK Multimedia etc. call MessageBox on missing assets — swallow those during scan.
-    const ScanUiSuppressor suppressPluginUi;
-
-   #if JUCE_WINDOWS
-    const auto previousErrorMode = SetErrorMode (SEM_FAILCRITICALERRORS
-                                                 | SEM_NOGPFAULTERRORBOX
-                                                 | SEM_NOOPENFILEERRORBOX);
-   #endif
-
-    list.setCustomScanner (std::make_unique<SilentPluginScanner>());
+    // Plugin binaries load in LiteHostScanner; a crash kills only the child.
+    list.setCustomScanner (std::make_unique<OutOfProcessPluginScanner> (AppPaths::pluginScannerExecutable()));
 
     const auto deadMansPedal = AppPaths::deadMansPedalFile();
     juce::PluginDirectoryScanner scanner (list, format, paths, true, deadMansPedal, true);
@@ -86,10 +50,6 @@ void PluginScanThread::run()
 
     failed += scanner.getFailedFiles().size();
     list.setCustomScanner (nullptr);
-
-   #if JUCE_WINDOWS
-    SetErrorMode (previousErrorMode);
-   #endif
 
     auto* hostPtr = &owner;
     juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::Component> (owner.asComponent()),

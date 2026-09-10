@@ -33,6 +33,16 @@ juce::File AppPaths::deadMansPedalFile()
     return appDirectory().getChildFile ("deadMansPedal");
 }
 
+juce::File AppPaths::pluginScannerExecutable()
+{
+    const auto host = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+   #if JUCE_WINDOWS
+    return host.getSiblingFile ("LiteHostScanner.exe");
+   #else
+    return host.getSiblingFile ("LiteHostScanner");
+   #endif
+}
+
 juce::File AppPaths::legacySessionFile()
 {
     return appDirectory().getChildFile ("session.xml");

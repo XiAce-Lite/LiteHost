@@ -31,6 +31,11 @@ if (-not (Test-Path $exe)) {
     throw "ビルド成果物が見つかりません。Defender が隔離／削除した可能性があります。管理者で .\scripts\add-defender-exclusion.ps1 を実行してから再ビルドしてください。"
 }
 
+$scanner = Join-Path (Split-Path $exe -Parent) "LiteHostScanner.exe"
+if (-not (Test-Path $scanner)) {
+    Write-Warning "LiteHostScanner.exe が隣にありません。VST3 スキャンはプロセス内フォールバックになります: $scanner"
+}
+
 # Defender は書き込み直後に消すことがある
 Start-Sleep -Seconds 2
 if (-not (Test-Path $exe)) {
@@ -38,3 +43,4 @@ if (-not (Test-Path $exe)) {
 }
 
 Write-Host "OK: $exe"
+if (Test-Path $scanner) { Write-Host "OK: $scanner" }

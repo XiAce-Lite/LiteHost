@@ -10,6 +10,7 @@ namespace AppPaths
     juce::File knownPluginsFile();
     juce::File pluginLoadLogFile();
     juce::File deadMansPedalFile();
+    juce::File pluginScannerExecutable();
     juce::File legacySessionFile();
     juce::File defaultProjectsDirectory();
 }
