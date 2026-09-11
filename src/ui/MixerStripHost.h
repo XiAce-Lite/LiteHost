@@ -8,6 +8,18 @@ class MixerSession;
 class TrackProcessor;
 class TrackStrip;
 
+struct ScanFinishInfo
+{
+    int registeredTotal = 0;
+    int newlyRegistered = 0;
+    int failed = 0;
+    int skippedBlacklist = 0;
+    int skippedUpToDate = 0;
+    int skippedIncompatible = 0;
+    int foundOnDisk = 0;
+    int examined = 0;
+};
+
 /**
  * Narrow façade for mixer strips and plugin scan UI callbacks.
  * MainComponent implements this; strips/scan no longer include MainComponent.h.
@@ -40,20 +52,7 @@ public:
     virtual void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter) = 0;
 
     virtual void setScanStatus (const juce::String& text) = 0;
-
-    struct ScanFinishInfo
-    {
-        int registeredTotal = 0;
-        int newlyRegistered = 0;
-        int failed = 0;
-        int skippedBlacklist = 0;
-        int skippedUpToDate = 0;
-        int skippedIncompatible = 0;
-        int foundOnDisk = 0;
-        int examined = 0;
-    };
-
-    virtual void scanFinished (ScanFinishInfo info = {}) = 0;
+    virtual void scanFinished (ScanFinishInfo info) = 0;
     /** For SafePointer from background scan thread; typically the MainComponent itself. */
     virtual juce::Component* asComponent() noexcept = 0;
 };

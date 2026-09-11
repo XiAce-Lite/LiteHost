@@ -113,7 +113,7 @@ void PluginScanThread::run()
         });
     };
 
-    auto finish = [hostPtr, safeComp] (MixerStripHost::ScanFinishInfo info) {
+    auto finish = [hostPtr, safeComp] (ScanFinishInfo info) {
         juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::Component> (safeComp),
                                           hostPtr, info] {
             if (safe != nullptr)
@@ -125,7 +125,7 @@ void PluginScanThread::run()
     if (! scannerExe.existsAsFile())
     {
         publishStatus (jp (u8"LiteHostScanner が見つかりません"));
-        finish ({});
+        finish (ScanFinishInfo{});
         return;
     }
 
@@ -150,7 +150,7 @@ void PluginScanThread::run()
                         u8"また、フォルダ名にスペースが多い場所（例: \"Mac SSD 1\"）も失敗しやすいので、"
                         u8"/Applications などへ移して試してください。"));
             });
-            finish ({});
+            finish (ScanFinishInfo{});
             return;
         }
         probe.shutdown();
@@ -178,7 +178,7 @@ void PluginScanThread::run()
     if (total == 0)
     {
         persistPluginList (list);
-        MixerStripHost::ScanFinishInfo info;
+        ScanFinishInfo info;
         info.registeredTotal = list.getNumTypes();
         info.skippedBlacklist = collected.skippedBlacklist;
         info.skippedUpToDate = collected.skippedUpToDate;
@@ -289,7 +289,7 @@ void PluginScanThread::run()
 
     persistPluginList (list);
 
-    MixerStripHost::ScanFinishInfo info;
+    ScanFinishInfo info;
     info.registeredTotal = list.getNumTypes();
     info.newlyRegistered = newlyRegistered.load();
     info.failed = failed.load();
