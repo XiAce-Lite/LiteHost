@@ -43,6 +43,49 @@ juce::File AppPaths::pluginScannerExecutable()
    #endif
 }
 
+void AppPaths::preparePluginScannerForLaunch()
+{
+   #if JUCE_MAC
+    const auto scanner = pluginScannerExecutable();
+    if (! scanner.existsAsFile())
+        return;
+
+    // GitHub zip downloads get com.apple.quarantine; Gatekeeper then SIGKILLs
+    // ChildProcess helpers even after the user opens the main app.
+    const auto appBundle = juce::File::getSpecialLocation (juce::File::currentApplicationFile);
+    const juce::StringArray targets {
+        appBundle.getFullPathName(),
+        scanner.getFullPathName()
+    };
+
+    for (const auto& path : targets)
+    {
+        if (path.isEmpty())
+            continue;
+
+        juce::ChildProcess proc;
+        juce::StringArray args;
+        args.add ("/usr/bin/xattr");
+        args.add ("-dr");
+        args.add ("com.apple.quarantine");
+        args.add (path);
+        if (proc.start (args, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
+            proc.waitForProcessToFinish (5000);
+    }
+
+    // Ensure execute bit survived zip/copy.
+    {
+        juce::ChildProcess chmodProc;
+        juce::StringArray args;
+        args.add ("/bin/chmod");
+        args.add ("+x");
+        args.add (scanner.getFullPathName());
+        if (chmodProc.start (args, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
+            chmodProc.waitForProcessToFinish (2000);
+    }
+   #endif
+}
+
 juce::File AppPaths::legacySessionFile()
 {
     return appDirectory().getChildFile ("session.xml");

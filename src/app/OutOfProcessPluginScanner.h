@@ -22,6 +22,9 @@ public:
 
     bool scannerAvailable() const { return scannerExe.existsAsFile(); }
 
+    /** Starts the child and connects IPC. Returns false if the helper cannot run. */
+    bool warmup();
+
     Outcome scanFile (const juce::String& fileOrIdentifier,
                       juce::OwnedArray<juce::PluginDescription>& result);
 

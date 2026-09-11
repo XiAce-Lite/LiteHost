@@ -1,5 +1,6 @@
 #include <JuceHeader.h>
 #include "CrashLog.h"
+#include "app/AppPaths.h"
 #include "ui/MainComponent.h"
 #include "ui/StartupSplash.h"
 #include "Utf8.h"
@@ -9,7 +10,7 @@ class LiteHostApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "LiteHost"; }
-    const juce::String getApplicationVersion() override { return "0.1.6"; }
+    const juce::String getApplicationVersion() override { return "0.1.7"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise (const juce::String& commandLine) override
@@ -17,6 +18,8 @@ public:
         CrashLog::install();
         CrashLog::clear();
         CrashLog::write ("LiteHost start");
+
+        AppPaths::preparePluginScannerForLaunch();
 
         // High priority can interact badly with SyncRoom's .NET process launch.
         juce::Process::setPriority (juce::Process::NormalPriority);

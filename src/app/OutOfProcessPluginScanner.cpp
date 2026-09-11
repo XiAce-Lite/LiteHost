@@ -16,6 +16,11 @@ void OutOfProcessPluginScanner::shutdown()
     stopChild (true);
 }
 
+bool OutOfProcessPluginScanner::warmup()
+{
+    return ensureChild();
+}
+
 void OutOfProcessPluginScanner::killChildNow()
 {
     socket.reset();

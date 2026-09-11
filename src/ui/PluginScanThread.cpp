@@ -93,6 +93,33 @@ void PluginScanThread::run()
         return;
     }
 
+    AppPaths::preparePluginScannerForLaunch();
+
+    // Verify the helper can actually start (macOS Gatekeeper often blocks it otherwise).
+    {
+        OutOfProcessPluginScanner probe (scannerExe);
+        if (! probe.warmup())
+        {
+            auto* hostPtr = &owner;
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<juce::Component> (owner.asComponent()),
+                                              hostPtr] {
+                if (safe == nullptr)
+                    return;
+                hostPtr->setScanStatus (jp (u8"スキャナを起動できませんでした"));
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::AlertWindow::WarningIcon,
+                    "LiteHost",
+                    jp (u8"LiteHostScanner を起動できませんでした。\n\n"
+                        u8"macOS で GitHub の zip から展開した場合、Gatekeeper が子プロセスを止めることがあります。\n"
+                        u8"ターミナルで次を実行してから、もう一度スキャンしてください。\n\n"
+                        u8"xattr -cr /path/to/LiteHost.app"));
+                hostPtr->scanFinished (0);
+            });
+            return;
+        }
+        probe.shutdown();
+    }
+
     const auto deadMansPedal = AppPaths::deadMansPedalFile();
     const auto targets = collectScanTargets (format, paths, list, deadMansPedal);
     const int total = targets.size();

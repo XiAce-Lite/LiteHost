@@ -75,6 +75,12 @@ Xcode と CMake が必要です。
 
 `master` への push と GitHub Release の公開時に、Actions が Apple Silicon 向け `LiteHost-*-macos-arm64.zip` を作り、同じバージョンのリリース（`vX.Y.Z`）へ添付します。未署名なので Gatekeeper が初回起動を止めることがあります。署名と公証は別途必要です。
 
+GitHub の zip から展開した直後は、Gatekeeper の検疫属性で **VST3 スキャン用の子プロセスが起動できない**ことがあります。アプリ起動時に解除を試みますが、だめならターミナルで次を実行してください。
+
+```bash
+xattr -cr /path/to/LiteHost.app
+```
+
 Windows ではデバイスタイプに **ASIO** が出ます。JUCE 同梱の ASIO ヘッダを使用し、配布物は Steinberg ASIO SDK のライセンスに従う必要があります。独自 SDK を使う場合は `third_party\asiosdk` に置き、CMake の `JUCE_ASIO_USE_EXTERNAL_SDK` を有効化してください。
 
 ## 使い方
@@ -108,6 +114,8 @@ Mackie Control / HUI / MMC 用の MIDI 入出力を演奏用とは別に指定�
 標準は **64bit** の `Common Files\VST3` のみです（macOS は `/Library/Audio/Plug-Ins/VST3`）。`Program Files (x86)\Common Files\VST3` など 32bit 向けフォルダは標準対象外です（64bit の LiteHost では読めず、スキャンが無駄に遅くなるため）。ユーザー領域などは追加フォルダとして登録できます。**VST2 フォルダを追加しても読み込み対象にはなりません。**
 
 スキャンは `LiteHostScanner` 子プロセスを最大 4 並列で動かします。応答しないプラグインはスキップしてブラックリストに載せ、次回以降は飛ばします。`LiteHostScanner` が本体と同じ場所に無いとスキャンできません。
+
+macOS で zip 展開直後にスキャンが進まない／スキャナ起動に失敗する場合は、Gatekeeper の検疫が原因のことが多いです。アプリ側でも解除を試みますが、だめなら `xattr -cr LiteHost.app` を実行してください。
 
 ![VST3 スキャン](assets/readme/options-vst-scan.png)
 

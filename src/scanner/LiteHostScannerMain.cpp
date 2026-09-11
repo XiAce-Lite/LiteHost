@@ -39,26 +39,38 @@ namespace
 
         while (juce::Time::getMillisecondCounter() < deadline)
         {
-            char c = 0;
-            const int got = socket.read (&c, 1, false);
+            const int ready = socket.waitUntilReady (true, 50);
+            if (ready < 0)
+                return false;
+            if (ready == 0)
+            {
+                if (! socket.isConnected())
+                    return false;
+                continue;
+            }
+
+            char chunk[512];
+            const int got = socket.read (chunk, (int) sizeof (chunk), false);
             if (got < 0)
                 return false;
             if (got == 0)
             {
                 if (! socket.isConnected())
                     return false;
-                juce::Thread::sleep (2);
                 continue;
             }
 
-            if (c == '\n')
+            for (int i = 0; i < got; ++i)
             {
-                line = buffer.toString().trimEnd();
-                return true;
+                const char c = chunk[i];
+                if (c == '\n')
+                {
+                    line = buffer.toString().trimEnd();
+                    return true;
+                }
+                if (c != '\r')
+                    buffer.writeByte ((juce::uint8) c);
             }
-
-            if (c != '\r')
-                buffer.writeByte ((juce::uint8) c);
         }
 
         return false;
@@ -81,8 +93,6 @@ namespace
         juce::String failReason;
         std::atomic<bool> done { false };
 
-        // If findAllTypesForFile wedges the message thread, parent kill may lag —
-        // self-exit so the TCP session drops and the host can continue.
         std::thread watchdog ([&done] {
             for (int i = 0; i < 28 && ! done.load (std::memory_order_relaxed); ++i)
                 juce::Thread::sleep (100);
@@ -136,7 +146,6 @@ namespace
         }
 
         finished.store (true);
-        // Wake the message loop so main can exit promptly.
         juce::MessageManager::callAsync ([] {});
     }
 }
@@ -147,16 +156,14 @@ int main (int, char**)
     SetErrorMode (SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
    #endif
 
+    // Unbuffered stdout so PORT reaches the parent even when piped.
+    std::cout.setf (std::ios::unitbuf);
+
     const juce::ScopedJuceInitialiser_GUI juceInit;
     juce::Process::setPriority (juce::Process::NormalPriority);
     juce::FloatVectorOperations::disableDenormalisedNumberSupport();
 
-    juce::AudioPluginFormatManager formats;
-    juce::addDefaultFormatsToManager (formats);
-    auto* format = findVst3Format (formats);
-    if (format == nullptr)
-        return 1;
-
+    // Announce readiness BEFORE loading plugin formats (can be slow on macOS).
     juce::StreamingSocket listener;
     if (! listener.createListener (0, "127.0.0.1"))
         return 2;
@@ -172,12 +179,20 @@ int main (int, char**)
     if (client == nullptr || ! client->isConnected())
         return 4;
 
+    juce::AudioPluginFormatManager formats;
+    juce::addDefaultFormatsToManager (formats);
+    auto* format = findVst3Format (formats);
+    if (format == nullptr)
+    {
+        writeLine (*client, PluginScanIpc::makeFailReply ("no-vst3-format"));
+        return 1;
+    }
+
     std::atomic<bool> finished { false };
     std::thread worker ([&] {
         serveClient (*format, *client, finished);
     });
 
-    // Keep dispatching while the worker probes plugins on this thread via callSync.
     while (! finished.load())
         juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
 
