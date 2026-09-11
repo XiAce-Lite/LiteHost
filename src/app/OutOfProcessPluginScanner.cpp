@@ -1,6 +1,9 @@
 #include "OutOfProcessPluginScanner.h"
 #include "scanner/PluginScanIpc.h"
 
+#include <atomic>
+#include <thread>
+
 OutOfProcessPluginScanner::OutOfProcessPluginScanner (juce::File scannerExecutable)
     : scannerExe (std::move (scannerExecutable))
 {
@@ -82,8 +85,35 @@ bool OutOfProcessPluginScanner::isLikelyCompatibleVst3 (const juce::String& file
 bool OutOfProcessPluginScanner::readChildStdoutLine (juce::String& line, int timeoutMs)
 {
     line.clear();
-    const auto start = juce::Time::getMillisecondCounter();
-    const auto deadline = start + (juce::uint32) juce::jmax (1, timeoutMs);
+
+    // JUCE ChildProcess::readProcessOutput blocks until the requested byte count
+    // arrives OR the child exits. Asking for a large buffer deadlocks us: the
+    // scanner only prints "PORT n\n" (~12 bytes) then waits on the TCP accept.
+    // Read 1 byte at a time, and kill the child if startup exceeds the timeout
+    // so a hung juceInit / Gatekeeper stall cannot freeze the scan thread forever.
+    std::atomic<bool> finished { false };
+    juce::ChildProcess* const proc = child.get();
+    const int timeout = juce::jmax (1, timeoutMs);
+
+    std::thread watchdog ([this, &finished, proc, timeout] {
+        int lastTickSec = -1;
+        for (int elapsed = 0; elapsed < timeout && ! finished.load (std::memory_order_relaxed); elapsed += 50)
+        {
+            juce::Thread::sleep (50);
+            const int sec = (elapsed + 50) / 1000;
+            if (onWaitTick && sec != lastTickSec && sec > 0)
+            {
+                lastTickSec = sec;
+                onWaitTick ("startup", sec * 1000, timeout);
+            }
+        }
+
+        if (! finished.load (std::memory_order_relaxed) && proc != nullptr && proc->isRunning())
+            proc->kill();
+    });
+
+    bool ok = false;
+    const auto deadline = juce::Time::getMillisecondCounter() + (juce::uint32) timeout;
 
     while (juce::Time::getMillisecondCounter() < deadline)
     {
@@ -99,25 +129,31 @@ bool OutOfProcessPluginScanner::readChildStdoutLine (juce::String& line, int tim
                 if (remain > 0)
                     next.append (data + i + 1, remain);
                 stdoutBuffer = std::move (next);
-                return true;
+                ok = true;
+                break;
             }
         }
 
-        if (child == nullptr || ! child->isRunning())
-            return false;
+        if (ok)
+            break;
 
-        char chunk[256];
-        const int got = child->readProcessOutput (chunk, (int) sizeof (chunk));
+        if (child == nullptr || ! child->isRunning())
+            break;
+
+        char byte = 0;
+        const int got = child->readProcessOutput (&byte, 1);
         if (got > 0)
         {
-            stdoutBuffer.append (chunk, (size_t) got);
+            stdoutBuffer.append (&byte, 1);
             continue;
         }
 
         juce::Thread::sleep (5);
     }
 
-    return false;
+    finished.store (true, std::memory_order_relaxed);
+    watchdog.join();
+    return ok;
 }
 
 bool OutOfProcessPluginScanner::ensureChild()

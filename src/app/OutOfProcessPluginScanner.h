@@ -46,5 +46,5 @@ private:
     juce::MemoryBlock stdoutBuffer;
     WaitTickFn onWaitTick;
     static constexpr int perPluginTimeoutMs = 3000;
-    static constexpr int startupTimeoutMs = 8000;
+    static constexpr int startupTimeoutMs = 15000; // ScopedJuceInitialiser_GUI can be slow cold-start
 };

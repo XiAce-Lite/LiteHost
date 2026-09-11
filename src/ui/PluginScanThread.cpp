@@ -134,6 +134,10 @@ void PluginScanThread::run()
 
     {
         OutOfProcessPluginScanner probe (scannerExe);
+        probe.setWaitTickHandler ([&publishStatus] (const juce::String&, int waitedMs, int) {
+            publishStatus (jp (u8"スキャナ起動を確認しています… ")
+                           + juce::String (waitedMs / 1000) + "s");
+        });
         if (! probe.warmup())
         {
             publishStatus (jp (u8"スキャナを起動できませんでした"));

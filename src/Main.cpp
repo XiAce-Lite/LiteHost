@@ -10,7 +10,7 @@ class LiteHostApplication : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return "LiteHost"; }
-    const juce::String getApplicationVersion() override { return "0.1.8"; }
+    const juce::String getApplicationVersion() override { return "0.1.9"; }
     bool moreThanOneInstanceAllowed() override { return false; }
 
     void initialise (const juce::String& commandLine) override
