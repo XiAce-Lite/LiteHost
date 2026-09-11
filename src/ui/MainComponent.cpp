@@ -397,16 +397,28 @@ void MainComponent::setScanStatus (const juce::String& text)
     status.setText (text, juce::dontSendNotification);
 }
 
-void MainComponent::scanFinished (int failedCount)
+void MainComponent::scanFinished (ScanFinishInfo info)
 {
     pruneMissingPlugins();
     savePluginList();
     const auto count = knownPlugins.getNumTypes();
     scanStatus.clear();
 
-    auto text = jp (u8"VST3 ") + juce::String (count) + jp (u8" 個を登録しました");
-    if (failedCount > 0)
-        text += jp (u8"（読み込み失敗 ") + juce::String (failedCount) + jp (u8"）");
+    juce::String text = jp (u8"VST3 登録 ") + juce::String (count) + jp (u8" 個");
+    if (info.newlyRegistered > 0)
+        text += jp (u8"（新規 ") + juce::String (info.newlyRegistered) + jp (u8"）");
+    if (info.examined > 0)
+        text += jp (u8" / 検査 ") + juce::String (info.examined);
+    if (info.failed > 0)
+        text += jp (u8" / 失敗 ") + juce::String (info.failed);
+    if (info.skippedBlacklist > 0)
+        text += jp (u8" / ブラックリスト ") + juce::String (info.skippedBlacklist);
+    if (info.skippedUpToDate > 0)
+        text += jp (u8" / 既存スキップ ") + juce::String (info.skippedUpToDate);
+    if (info.foundOnDisk > 0 && info.examined == 0 && info.newlyRegistered == 0 && info.failed == 0)
+        text += jp (u8" / ディスク ") + juce::String (info.foundOnDisk)
+              + jp (u8" 件（今回の追加なし）");
+
     status.setText (text, juce::dontSendNotification);
     scanInProgress = false;
     menuItemsChanged();
@@ -1255,7 +1267,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.1.7");
+                             : juce::String ("0.1.8");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(LiteHost VERSION 0.1.7 LANGUAGES C CXX)
+project(LiteHost VERSION 0.1.8 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,7 +24,7 @@ FetchContent_MakeAvailable(JUCE)
 
 juce_add_gui_app(LiteHost
     PRODUCT_NAME "LiteHost"
-    VERSION "0.1.7"
+    VERSION "0.1.8"
     COMPANY_NAME "LiteHost"
     BUNDLE_ID com.litehost.app
     ICON_BIG "${CMAKE_SOURCE_DIR}/assets/icon.png"
@@ -153,7 +153,7 @@ target_link_libraries(LiteHost PRIVATE
 # ---------------------------------------------------------------------------
 juce_add_console_app(LiteHostScanner
     PRODUCT_NAME "LiteHostScanner"
-    VERSION "0.1.7"
+    VERSION "0.1.8"
     COMPANY_NAME "LiteHost"
     BUNDLE_ID com.litehost.scanner
     NEEDS_WEB_BROWSER FALSE

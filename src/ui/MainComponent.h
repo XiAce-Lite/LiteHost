@@ -38,7 +38,7 @@ public:
     void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
 
     void setScanStatus (const juce::String& text) override;
-    void scanFinished (int failedCount = 0) override;
+    void scanFinished (ScanFinishInfo info = {}) override;
     juce::Component* asComponent() noexcept override { return this; }
 
     void promptAddPlugin (const juce::Uuid& trackId, bool master) override;

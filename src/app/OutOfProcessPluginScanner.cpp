@@ -132,7 +132,10 @@ bool OutOfProcessPluginScanner::ensureChild()
         return false;
 
     child = std::make_unique<juce::ChildProcess>();
-    if (! child->start (scannerExe.getFullPathName(), juce::ChildProcess::wantStdOut))
+    // StringArray keeps paths with spaces intact (String overload tokenizes on spaces).
+    juce::StringArray launchArgs;
+    launchArgs.add (scannerExe.getFullPathName());
+    if (! child->start (launchArgs, juce::ChildProcess::wantStdOut))
     {
         child.reset();
         return false;
