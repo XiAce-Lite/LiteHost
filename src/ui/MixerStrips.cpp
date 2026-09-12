@@ -31,6 +31,8 @@ namespace
 
     constexpr int midiComboIdBase = 10000;
     constexpr int midiAllComboId = 9999;
+    // Must not collide with midiAllComboId (was midiComboIdBase - 1 == 9999).
+    constexpr int midiMissingComboId = 9998;
 
     void configureChannelFader (juce::Slider& slider)
     {
@@ -158,7 +160,7 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
     input.setTextWhenNoChoicesAvailable (jp (u8"入力なし"));
     input.onChange = [this] {
         const int id = input.getSelectedId();
-        if (id == midiComboIdBase - 1)
+        if (id == midiMissingComboId)
             return;
 
         if (isMidiComboId (id))
@@ -566,8 +568,8 @@ void TrackStrip::refreshInputs()
 
         if (! found)
         {
-            input.addItem ("MIDI: (" + track.midiDeviceId + ")", midiComboIdBase - 1);
-            input.setSelectedId (midiComboIdBase - 1, juce::dontSendNotification);
+            input.addItem ("MIDI: (" + track.midiDeviceId + ")", midiMissingComboId);
+            input.setSelectedId (midiMissingComboId, juce::dontSendNotification);
         }
     }
     else
