@@ -1,6 +1,7 @@
 #pragma once
 
 #include "HostPlayHead.h"
+#include "ParallelTrackExecutor.h"
 #include "TrackProcessor.h"
 #include <atomic>
 #include <vector>
@@ -86,12 +87,18 @@ private:
     const juce::MidiBuffer* findDeviceMidi (const juce::String& deviceId) const noexcept;
     void applyPanicIfNeeded (int numSamples) noexcept;
     static void buildPanicMidi (juce::MidiBuffer& dest);
+    void processActiveTracks (const float* const* inputChannelData,
+                              int numInputChannels,
+                              int numSamples,
+                              bool anySolo) noexcept;
 
     HostPlayHead playHead;
     std::vector<std::unique_ptr<TrackProcessor>> tracks_;
     PluginChain masterPlugins_;
+    ParallelTrackExecutor trackExecutor;
     juce::AudioBuffer<float> masterBus;
     juce::AudioBuffer<float> limiterDelay;
+    juce::HeapBlock<float> limiterPeakRing;
     juce::dsp::Reverb reverb;
     juce::dsp::ProcessSpec spec {};
     juce::CriticalSection callbackLock;
@@ -123,4 +130,6 @@ private:
     float limiterGain = 1.0f;
     float limiterAttack = 1.0f;
     float limiterRelease = 1.0f;
+    float limiterWindowPeak = 0.0f;
+    static constexpr int maxParallelTrackJobs = 64;
 };

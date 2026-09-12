@@ -177,20 +177,22 @@ void PluginChain::processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, con
     }
 
     // JUCE VST3 maps in+out in-place from channel 0: buffer needs max(ins, outs) channels.
-    // Never scratch.clear() the whole allocation (was 128ch × 8192 every block → major xruns).
-    const int copyIn = juce::jmin (hostChans, juce::jmax (0, slot.numIns));
+    // Only silence real input channels we did not fill. Output-only channels (numIns..N) are
+    // written by the plugin — clearing SyncRoom's ~18 extra outs every block was pure waste.
+    const int numIns = juce::jmax (0, slot.numIns);
+    const int copyIn = juce::jmin (hostChans, numIns);
     for (int ch = 0; ch < copyIn; ++ch)
         scratch.copyFrom (ch, 0, buffer, ch, 0, numSamples);
 
-    if (hostChans == 1 && slot.numIns >= 2)
+    if (hostChans == 1 && numIns >= 2)
     {
         scratch.copyFrom (1, 0, scratch, 0, 0, numSamples);
-        for (int ch = 2; ch < pluginChans; ++ch)
+        for (int ch = 2; ch < numIns; ++ch)
             juce::FloatVectorOperations::clear (scratch.getWritePointer (ch), numSamples);
     }
     else
     {
-        for (int ch = copyIn; ch < pluginChans; ++ch)
+        for (int ch = copyIn; ch < numIns; ++ch)
             juce::FloatVectorOperations::clear (scratch.getWritePointer (ch), numSamples);
     }
 
@@ -205,13 +207,14 @@ void PluginChain::processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, con
 
     // Main stereo from the first output bus only.
     // Do not sum multi-outs: drum kits often put the same hit on several buses and summing causes harsh overload/phase junk.
-    buffer.clear();
     const int copyOut = juce::jmin (hostChans, 2, juce::jmax (0, slot.numOuts));
     for (int ch = 0; ch < copyOut; ++ch)
         buffer.copyFrom (ch, 0, scratch, ch, 0, numSamples);
 
     if (copyOut == 1 && hostChans >= 2)
         buffer.copyFrom (1, 0, buffer, 0, 0, numSamples);
+    else if (copyOut == 0)
+        buffer.clear();
 }
 
 void PluginChain::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& incomingMidi) noexcept

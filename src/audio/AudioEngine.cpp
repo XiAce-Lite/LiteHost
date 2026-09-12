@@ -139,6 +139,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     playHead.setSampleRate (sampleRate);
     playHead.setPlaying (true);
     playHead.resetPosition();
+    trackExecutor.ensureStarted();
     prepareGraph();
     {
         const juce::ScopedLock midi (midiLock);
@@ -177,6 +178,7 @@ void AudioEngine::audioDeviceStopped()
     gateGain = 1.0f;
     gateOpen = true;
     resetPeakLimiter();
+    // Keep workers alive across device restarts; destroy with the engine.
 }
 
 void AudioEngine::prepareGraph()
@@ -201,8 +203,10 @@ void AudioEngine::prepareGraph()
     limiterLookAhead = juce::jlimit (1, 512, (int) std::lround (sampleRate * 0.002));
     limiterDelay.setSize (2, limiterLookAhead, false, true, true);
     limiterDelay.clear();
+    limiterPeakRing.allocate ((size_t) limiterLookAhead, true);
     limiterWrite = 0;
     limiterGain = 1.0f;
+    limiterWindowPeak = 0.0f;
     const float sr = sampleRate > 0.0 ? (float) sampleRate : 48000.0f;
     limiterAttack = 1.0f - std::exp (-1.0f / (0.0005f * sr));  // ~0.5 ms
     limiterRelease = 1.0f - std::exp (-1.0f / (0.080f * sr));   // ~80 ms
@@ -388,13 +392,17 @@ void AudioEngine::resetPeakLimiter() noexcept
 {
     limiterGain = 1.0f;
     limiterWrite = 0;
+    limiterWindowPeak = 0.0f;
     if (limiterDelay.getNumSamples() > 0)
         limiterDelay.clear();
+    if (limiterPeakRing != nullptr && limiterLookAhead > 0)
+        juce::FloatVectorOperations::clear (limiterPeakRing.getData(), limiterLookAhead);
 }
 
 void AudioEngine::applyPeakLimiter (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
 {
-    if (numSamples <= 0 || limiterLookAhead <= 0 || limiterDelay.getNumSamples() < limiterLookAhead)
+    if (numSamples <= 0 || limiterLookAhead <= 0 || limiterDelay.getNumSamples() < limiterLookAhead
+        || limiterPeakRing == nullptr)
         return;
 
     const float ceiling = juce::Decibels::decibelsToGain (limiterThresholdDb.load (std::memory_order_relaxed));
@@ -405,6 +413,7 @@ void AudioEngine::applyPeakLimiter (juce::AudioBuffer<float>& buffer, int numSam
     auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : left;
     auto* delayL = limiterDelay.getWritePointer (0);
     auto* delayR = limiterDelay.getWritePointer (1);
+    auto* peakRing = limiterPeakRing.getData();
 
     for (int i = 0; i < numSamples; ++i)
     {
@@ -417,11 +426,24 @@ void AudioEngine::applyPeakLimiter (juce::AudioBuffer<float>& buffer, int numSam
         delayL[limiterWrite] = inL;
         delayR[limiterWrite] = inR;
 
-        float peak = 0.0f;
-        for (int j = 0; j < limiterLookAhead; ++j)
-            peak = juce::jmax (peak, std::abs (delayL[j]), std::abs (delayR[j]));
+        const float samplePeak = juce::jmax (std::abs (inL), std::abs (inR));
+        const float oldPeak = peakRing[limiterWrite];
+        peakRing[limiterWrite] = samplePeak;
 
-        const float target = peak > ceiling ? (ceiling / peak) : 1.0f;
+        // Sliding-window max: O(1) when rising / when old wasn't the max; rescan only when needed.
+        if (samplePeak >= limiterWindowPeak)
+        {
+            limiterWindowPeak = samplePeak;
+        }
+        else if (oldPeak >= limiterWindowPeak * 0.999f)
+        {
+            float peak = 0.0f;
+            for (int j = 0; j < limiterLookAhead; ++j)
+                peak = juce::jmax (peak, peakRing[j]);
+            limiterWindowPeak = peak;
+        }
+
+        const float target = limiterWindowPeak > ceiling ? (ceiling / limiterWindowPeak) : 1.0f;
         const float coeff = target < limiterGain ? limiterAttack : limiterRelease;
         limiterGain += (target - limiterGain) * coeff;
 
@@ -488,6 +510,41 @@ void AudioEngine::applyOutputFadeIn (int numSamples) noexcept
     outputFadeSamplesRemaining = remainingAtStart - apply;
 }
 
+void AudioEngine::processActiveTracks (const float* const* inputChannelData,
+                                       int numInputChannels,
+                                       int numSamples,
+                                       bool anySolo) noexcept
+{
+    static const juce::MidiBuffer emptyMidi;
+    ParallelTrackExecutor::Job jobs[maxParallelTrackJobs];
+    int numJobs = 0;
+
+    for (auto& track : tracks_)
+    {
+        if (numJobs >= maxParallelTrackJobs)
+            break;
+        if (track->mute.load (std::memory_order_relaxed))
+            continue;
+        if (anySolo
+            && ! track->solo.load (std::memory_order_relaxed)
+            && ! track->soloOverride.load (std::memory_order_relaxed))
+            continue;
+
+        const juce::MidiBuffer* trackMidi = &emptyMidi;
+        if (track->midiDeviceId == midiAllDevicesId)
+            trackMidi = &midiAllScratch;
+        else if (track->midiDeviceId.isNotEmpty())
+        {
+            if (auto* found = findDeviceMidi (track->midiDeviceId))
+                trackMidi = found;
+        }
+
+        jobs[numJobs++] = { track.get(), trackMidi };
+    }
+
+    trackExecutor.processAndMix (jobs, numJobs, inputChannelData, numInputChannels, numSamples, masterBus);
+}
+
 void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputChannelData,
                                                     int numInputChannels,
                                                     float* const* outputChannelData,
@@ -523,29 +580,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         }
     }
 
-    static const juce::MidiBuffer emptyMidi;
-
-    for (auto& track : tracks_)
-    {
-        if (track->mute.load (std::memory_order_relaxed))
-            continue;
-        if (anySolo
-            && ! track->solo.load (std::memory_order_relaxed)
-            && ! track->soloOverride.load (std::memory_order_relaxed))
-            continue;
-
-        const juce::MidiBuffer* trackMidi = &emptyMidi;
-        if (track->midiDeviceId == midiAllDevicesId)
-            trackMidi = &midiAllScratch;
-        else if (track->midiDeviceId.isNotEmpty())
-        {
-            if (auto* found = findDeviceMidi (track->midiDeviceId))
-                trackMidi = found;
-        }
-
-        track->processInputs (inputChannelData, numInputChannels, numSamples, *trackMidi);
-        track->mixTo (masterBus, numSamples);
-    }
+    processActiveTracks (inputChannelData, numInputChannels, numSamples, anySolo);
 
     if (gateEnabled.load (std::memory_order_relaxed))
         applyGate (masterBus, numSamples);
@@ -581,6 +616,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         }
     }
 
+    static const juce::MidiBuffer emptyMidi;
     masterPlugins_.process (masterBus, emptyMidi);
 
     const float magnitude = juce::jmin (1.0f, masterBus.getMagnitude (0, numSamples));
