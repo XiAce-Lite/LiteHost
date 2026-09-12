@@ -696,9 +696,10 @@ void MainComponent::showMidiLearnSettings()
 
 void MainComponent::showOptionsGeneral()
 {
-    auto panel = std::make_unique<OptionsGeneralPanel> (mixer.getExclusiveSoloMode());
+    auto panel = std::make_unique<OptionsGeneralPanel> (mixer.getExclusiveSoloMode(),
+                                                        mixer.getParallelTracksEnabled());
     auto* panelPtr = panel.get();
-    panel->setSize (480, 200);
+    panel->setSize (480, 280);
     auto* window = AppModalDialog::launchPanel (this, std::move (panel), jp (u8"一般"), false);
     panelPtr->onClose = [window] {
         if (window != nullptr)
@@ -706,6 +707,7 @@ void MainComponent::showOptionsGeneral()
     };
     panelPtr->onOk = [this, panelPtr] {
         mixer.setExclusiveSoloMode (panelPtr->getExclusiveSolo());
+        mixer.setParallelTracksEnabled (panelPtr->getParallelTracks());
         saveAppSettings();
         status.setText (makeStatusText(), juce::dontSendNotification);
     };
@@ -1133,7 +1135,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.2.2");
+                             : juce::String ("0.2.3");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {

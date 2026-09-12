@@ -40,6 +40,7 @@ void AppSettingsStore::load (AudioEngine& engine,
                 extraVstPaths.addIfNotAlreadyThere (child->getStringAttribute ("value"));
 
     engine.exclusiveSoloMode = xml->getBoolAttribute ("exclusiveSoloMode", false);
+    engine.parallelTracksEnabled = xml->getBoolAttribute ("parallelTracksEnabled", true);
     surface.readXml (*xml);
     learn.readXml (*xml);
 }
@@ -54,6 +55,7 @@ void AppSettingsStore::save (const AudioEngine& engine,
     xml.setAttribute ("windowState", windowState);
     xml.setAttribute ("skippedReleaseTag", skippedReleaseTag);
     xml.setAttribute ("exclusiveSoloMode", engine.exclusiveSoloMode.load() ? 1 : 0);
+    xml.setAttribute ("parallelTracksEnabled", engine.parallelTracksEnabled.load() ? 1 : 0);
 
     auto* recent = xml.createNewChildElement ("RECENT");
     for (const auto& file : recentProjects)

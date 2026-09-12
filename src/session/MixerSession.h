@@ -31,6 +31,8 @@ public:
 
     bool getExclusiveSoloMode() const;
     void setExclusiveSoloMode (bool enabled);
+    bool getParallelTracksEnabled() const;
+    void setParallelTracksEnabled (bool enabled);
 
     void setTrackGain (TrackProcessor& track, float gainLinear, bool notifyUi = false);
     void setTrackTrim (TrackProcessor& track, float gainLinear, bool notifyUi = false);

@@ -60,6 +60,8 @@ public:
     std::atomic<float> masterPeak { 0.0f };
     /** Cakewalk Exclusive Solo: next solo click unsilos other tracks. Override is kept. */
     std::atomic<bool> exclusiveSoloMode { false };
+    /** When true, active tracks may process on helper threads (see ParallelTrackExecutor). */
+    std::atomic<bool> parallelTracksEnabled { true };
 
     double getSampleRate() const noexcept { return sampleRate; }
     int getBlockSize() const noexcept { return blockSize; }

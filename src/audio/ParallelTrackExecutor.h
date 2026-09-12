@@ -24,13 +24,15 @@ public:
     void ensureStarted();
     void shutdown();
 
-    /** Process each job's processInputs (parallel), then mixTo master (serial). Audio-thread only. */
+    /** Process each job's processInputs, then mixTo master (serial). Audio-thread only.
+        When allowParallel is false (or too few jobs), runs entirely on the calling thread. */
     void processAndMix (Job* jobs,
                         int numJobs,
                         const float* const* inputs,
                         int numInputChannels,
                         int numSamples,
-                        juce::AudioBuffer<float>& master) noexcept;
+                        juce::AudioBuffer<float>& master,
+                        bool allowParallel) noexcept;
 
     int getWorkerCount() const noexcept { return (int) workers.size(); }
 
@@ -40,6 +42,12 @@ private:
 
     void workerLoop() noexcept;
     void runJobsOnThisThread() noexcept;
+    void processSerial (Job* jobList,
+                        int numJobs,
+                        const float* const* inputs,
+                        int numInputChannels,
+                        int numSamples,
+                        juce::AudioBuffer<float>& master) noexcept;
 
     std::vector<std::unique_ptr<Worker>> workers;
 

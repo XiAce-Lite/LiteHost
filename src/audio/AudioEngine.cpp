@@ -542,7 +542,8 @@ void AudioEngine::processActiveTracks (const float* const* inputChannelData,
         jobs[numJobs++] = { track.get(), trackMidi };
     }
 
-    trackExecutor.processAndMix (jobs, numJobs, inputChannelData, numInputChannels, numSamples, masterBus);
+    trackExecutor.processAndMix (jobs, numJobs, inputChannelData, numInputChannels, numSamples, masterBus,
+                                 parallelTracksEnabled.load (std::memory_order_relaxed));
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputChannelData,

@@ -55,6 +55,16 @@ void MixerSession::setExclusiveSoloMode (bool enabled)
     engine.exclusiveSoloMode = enabled;
 }
 
+bool MixerSession::getParallelTracksEnabled() const
+{
+    return engine.parallelTracksEnabled.load();
+}
+
+void MixerSession::setParallelTracksEnabled (bool enabled)
+{
+    engine.parallelTracksEnabled = enabled;
+}
+
 void MixerSession::setTrackGain (TrackProcessor& track, float gainLinear, bool notifyUi)
 {
     track.gain = juce::jlimit (0.0f, juce::Decibels::decibelsToGain (12.0f), gainLinear);

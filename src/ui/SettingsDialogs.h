@@ -43,13 +43,14 @@ public:
     std::function<void()> onOk;
     std::function<void()> onClose;
 
-    explicit OptionsGeneralPanel (bool exclusiveSolo);
+    OptionsGeneralPanel (bool exclusiveSolo, bool parallelTracks);
     void resized() override;
 
     bool getExclusiveSolo() const { return exclusiveSoloToggle.getToggleState(); }
+    bool getParallelTracks() const { return parallelTracksToggle.getToggleState(); }
 
 private:
-    juce::Label title, exclusiveHint;
-    juce::ToggleButton exclusiveSoloToggle;
+    juce::Label title, exclusiveHint, parallelHint;
+    juce::ToggleButton exclusiveSoloToggle, parallelTracksToggle;
     juce::TextButton ok, close;
 };

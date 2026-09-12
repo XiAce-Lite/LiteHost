@@ -7,7 +7,13 @@ public:
         : juce::Thread ("LHTrack" + juce::String (index)),
           owner (ownerToUse)
     {
-        startThread (juce::Thread::Priority::highest);
+        // Keep helpers below the audio callback priority so they don't fight the I/O thread.
+        // On Apple Silicon, highest-priority helpers tend to wake P-cores and inflate occupancy.
+       #if JUCE_MAC
+        startThread (juce::Thread::Priority::normal);
+       #else
+        startThread (juce::Thread::Priority::high);
+       #endif
     }
 
     ~Worker() override
@@ -52,8 +58,12 @@ void ParallelTrackExecutor::ensureStarted()
         return;
 
     const int cpus = juce::jmax (1, juce::SystemStats::getNumCpus());
-    // Audio thread also steals work; spawn (cpus - 1) helpers, cap to keep scheduling light.
+   #if JUCE_MAC
+    // Prefer fewer helpers on hybrid Apple CPUs; audio thread still steals work.
+    const int helperCount = juce::jlimit (0, 4, (cpus + 1) / 2);
+   #else
     const int helperCount = juce::jlimit (0, 8, cpus - 1);
+   #endif
 
     exitFlag.store (false, std::memory_order_release);
     workers.reserve ((size_t) helperCount);
@@ -107,26 +117,38 @@ void ParallelTrackExecutor::runJobsOnThisThread() noexcept
     }
 }
 
-void ParallelTrackExecutor::processAndMix (Job* jobList,
+void ParallelTrackExecutor::processSerial (Job* jobList,
                                            int numJobs,
                                            const float* const* inputs,
                                            int numInputChannelsIn,
                                            int numSamplesIn,
                                            juce::AudioBuffer<float>& master) noexcept
 {
+    for (int i = 0; i < numJobs; ++i)
+    {
+        auto& job = jobList[i];
+        if (job.track == nullptr || job.midi == nullptr)
+            continue;
+        job.track->processInputs (inputs, numInputChannelsIn, numSamplesIn, *job.midi);
+        job.track->mixTo (master, numSamplesIn);
+    }
+}
+
+void ParallelTrackExecutor::processAndMix (Job* jobList,
+                                           int numJobs,
+                                           const float* const* inputs,
+                                           int numInputChannelsIn,
+                                           int numSamplesIn,
+                                           juce::AudioBuffer<float>& master,
+                                           bool allowParallel) noexcept
+{
     if (jobList == nullptr || numJobs <= 0 || numSamplesIn <= 0)
         return;
 
-    if (numJobs == 1 || ! started || workers.empty())
+    // Parallel wake/join costs more than it saves for a single heavy track (common live case).
+    if (! allowParallel || numJobs < 2 || ! started || workers.empty())
     {
-        for (int i = 0; i < numJobs; ++i)
-        {
-            auto& job = jobList[i];
-            if (job.track == nullptr || job.midi == nullptr)
-                continue;
-            job.track->processInputs (inputs, numInputChannelsIn, numSamplesIn, *job.midi);
-            job.track->mixTo (master, numSamplesIn);
-        }
+        processSerial (jobList, numJobs, inputs, numInputChannelsIn, numSamplesIn, master);
         return;
     }
 
@@ -140,8 +162,10 @@ void ParallelTrackExecutor::processAndMix (Job* jobList,
     doneEvent.reset();
     std::atomic_thread_fence (std::memory_order_release);
 
-    for (auto& worker : workers)
-        worker->kick();
+    // Wake only as many helpers as can usefully steal work (not the whole pool).
+    const int helpersToKick = juce::jmin ((int) workers.size(), numJobs - 1);
+    for (int i = 0; i < helpersToKick; ++i)
+        workers[(size_t) i]->kick();
 
     runJobsOnThisThread();
 

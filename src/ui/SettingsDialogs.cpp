@@ -195,7 +195,7 @@ void MidiLearnSettingsPanel::resized()
     ok.setBounds (buttons.removeFromRight (90).reduced (2));
 }
 
-OptionsGeneralPanel::OptionsGeneralPanel (bool exclusiveSolo)
+OptionsGeneralPanel::OptionsGeneralPanel (bool exclusiveSolo, bool parallelTracks)
 {
     title.setText (jp (u8"一般"), juce::dontSendNotification);
     title.setFont (LiteLookAndFeel::uiFont (16.0f, juce::Font::bold));
@@ -211,6 +211,17 @@ OptionsGeneralPanel::OptionsGeneralPanel (bool exclusiveSolo)
                            juce::dontSendNotification);
     exclusiveHint.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
     addAndMakeVisible (exclusiveHint);
+
+    parallelTracksToggle.setButtonText (jp (u8"トラック並列処理"));
+    parallelTracksToggle.setClickingTogglesState (true);
+    parallelTracksToggle.setToggleState (parallelTracks, juce::dontSendNotification);
+    parallelTracksToggle.setTooltip (jp (u8"ON: 有効トラックの VST を複数コアで並列処理（マスター VST は常に直列）。\nOFF: すべてオーディオスレッドで直列。CPU 占有やノイズが出るときは OFF を試してください。"));
+    addAndMakeVisible (parallelTracksToggle);
+
+    parallelHint.setText (jp (u8"複数トラックの負荷を分散します。占有率が上がる・音が欠けるときは OFF にしてください"),
+                          juce::dontSendNotification);
+    parallelHint.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
+    addAndMakeVisible (parallelHint);
 
     ok.setButtonText (jp (u8"OK"));
     ok.onClick = [this] {
@@ -231,8 +242,11 @@ void OptionsGeneralPanel::resized()
     auto r = getLocalBounds().reduced (16);
     title.setBounds (r.removeFromTop (24));
     r.removeFromTop (12);
-    exclusiveSoloToggle.setBounds (r.removeFromTop (28).removeFromLeft (200));
+    exclusiveSoloToggle.setBounds (r.removeFromTop (28).removeFromLeft (220));
     exclusiveHint.setBounds (r.removeFromTop (40));
+    r.removeFromTop (8);
+    parallelTracksToggle.setBounds (r.removeFromTop (28).removeFromLeft (220));
+    parallelHint.setBounds (r.removeFromTop (40));
     auto buttons = r.removeFromBottom (36);
     close.setBounds (buttons.removeFromRight (90).reduced (2));
     ok.setBounds (buttons.removeFromRight (90).reduced (2));
