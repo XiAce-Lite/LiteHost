@@ -25,6 +25,48 @@ void AudioEngine::handleIncomingMidiMessage (juce::MidiInput* source, const juce
         pendingMidi.removeRange (0, pendingMidi.size() - maxPending);
 }
 
+void AudioEngine::requestPanic() noexcept
+{
+    panicPending.store (true, std::memory_order_release);
+}
+
+void AudioEngine::buildPanicMidi (juce::MidiBuffer& dest)
+{
+    dest.clear();
+    for (int channel = 1; channel <= 16; ++channel)
+    {
+        dest.addEvent (juce::MidiMessage::controllerEvent (channel, 64, 0), 0);   // sustain off
+        dest.addEvent (juce::MidiMessage::controllerEvent (channel, 120, 0), 0);  // all sound off
+        dest.addEvent (juce::MidiMessage::controllerEvent (channel, 123, 0), 0);  // all notes off
+        for (int note = 0; note < 128; ++note)
+            dest.addEvent (juce::MidiMessage::noteOff (channel, note), 0);
+    }
+}
+
+void AudioEngine::applyPanicIfNeeded (int numSamples) noexcept
+{
+    if (! panicPending.exchange (false, std::memory_order_acq_rel))
+        return;
+
+    {
+        const juce::ScopedLock sl (midiLock);
+        pendingMidi.clear();
+    }
+
+    midiAllScratch.clear();
+    for (int b = 0; b < numMidiDeviceBuckets; ++b)
+        midiDeviceBuckets[b].clear();
+    numMidiDeviceBuckets = 0;
+
+    juce::MidiBuffer panicMidi;
+    buildPanicMidi (panicMidi);
+
+    for (auto& track : tracks_)
+        track->plugins.deliverMidiPanic (panicMidi, numSamples);
+
+    masterPlugins_.deliverMidiPanic (panicMidi, numSamples);
+}
+
 void AudioEngine::drainPendingMidi (int numSamples) noexcept
 {
     midiAllScratch.clear();
@@ -111,8 +153,12 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     gateEnv = 0.0f;
     gateGain = 0.0f;
     gateOpen = false;
+    resetPeakLimiter();
     reverb.reset();
     running = true;
+
+    // Honour panic pressed while the device was stopped.
+    applyPanicIfNeeded (blockSize);
 }
 
 void AudioEngine::audioDeviceStopped()
@@ -130,6 +176,7 @@ void AudioEngine::audioDeviceStopped()
     gateEnv = 0.0f;
     gateGain = 1.0f;
     gateOpen = true;
+    resetPeakLimiter();
 }
 
 void AudioEngine::prepareGraph()
@@ -149,6 +196,16 @@ void AudioEngine::prepareGraph()
 
     masterPlugins_.prepare (sampleRate, blockSize, &playHead);
     reverb.prepare (spec);
+
+    // ~2 ms look-ahead keeps live latency small while avoiding instant-clip harshness.
+    limiterLookAhead = juce::jlimit (1, 512, (int) std::lround (sampleRate * 0.002));
+    limiterDelay.setSize (2, limiterLookAhead, false, true, true);
+    limiterDelay.clear();
+    limiterWrite = 0;
+    limiterGain = 1.0f;
+    const float sr = sampleRate > 0.0 ? (float) sampleRate : 48000.0f;
+    limiterAttack = 1.0f - std::exp (-1.0f / (0.0005f * sr));  // ~0.5 ms
+    limiterRelease = 1.0f - std::exp (-1.0f / (0.080f * sr));   // ~80 ms
 }
 
 TrackProcessor* AudioEngine::addTrack (juce::String name)
@@ -228,6 +285,7 @@ void AudioEngine::clearTracksAndMaster()
     gateGain = 1.0f;
     gateOpen = true;
     masterPeak = 0.0f;
+    resetPeakLimiter();
     appliedReverbRoom = -1.0f;
     appliedReverbDamping = -1.0f;
     appliedReverbWet = -1.0f;
@@ -326,25 +384,52 @@ void AudioEngine::applyGate (juce::AudioBuffer<float>& buffer, int numSamples) n
     }
 }
 
-void AudioEngine::applyCeiling (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+void AudioEngine::resetPeakLimiter() noexcept
 {
+    limiterGain = 1.0f;
+    limiterWrite = 0;
+    if (limiterDelay.getNumSamples() > 0)
+        limiterDelay.clear();
+}
+
+void AudioEngine::applyPeakLimiter (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
+{
+    if (numSamples <= 0 || limiterLookAhead <= 0 || limiterDelay.getNumSamples() < limiterLookAhead)
+        return;
+
     const float ceiling = juce::Decibels::decibelsToGain (limiterThresholdDb.load (std::memory_order_relaxed));
-    if (ceiling <= 0.0f || numSamples <= 0)
+    if (ceiling <= 0.0f)
         return;
 
     auto* left = buffer.getWritePointer (0);
     auto* right = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : left;
+    auto* delayL = limiterDelay.getWritePointer (0);
+    auto* delayR = limiterDelay.getWritePointer (1);
 
     for (int i = 0; i < numSamples; ++i)
     {
-        const float peak = juce::jmax (std::abs (left[i]), std::abs (right[i]));
-        if (peak > ceiling)
-        {
-            const float g = ceiling / peak;
-            left[i] *= g;
-            if (right != left)
-                right[i] *= g;
-        }
+        const float inL = left[i];
+        const float inR = right[i];
+
+        const float outL = delayL[limiterWrite];
+        const float outR = delayR[limiterWrite];
+
+        delayL[limiterWrite] = inL;
+        delayR[limiterWrite] = inR;
+
+        float peak = 0.0f;
+        for (int j = 0; j < limiterLookAhead; ++j)
+            peak = juce::jmax (peak, std::abs (delayL[j]), std::abs (delayR[j]));
+
+        const float target = peak > ceiling ? (ceiling / peak) : 1.0f;
+        const float coeff = target < limiterGain ? limiterAttack : limiterRelease;
+        limiterGain += (target - limiterGain) * coeff;
+
+        left[i] = outL * limiterGain;
+        if (right != left)
+            right[i] = outR * limiterGain;
+
+        limiterWrite = (limiterWrite + 1) % limiterLookAhead;
     }
 }
 
@@ -426,6 +511,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     masterBus.clear();
     updateBuiltInParameters();
     drainPendingMidi (numSamples);
+    applyPanicIfNeeded (numSamples);
 
     bool anySolo = false;
     for (auto& track : tracks_)
@@ -471,15 +557,14 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         reverb.process (context);
     }
 
-    masterPlugins_.process (masterBus, emptyMidi);
-
     const float masterG = masterGain.load (std::memory_order_relaxed);
     if (! juce::approximatelyEqual (masterG, 1.0f))
         masterBus.applyGain (0, numSamples, masterG);
 
+    // Peak-limit before master VSTs so SyncRoom (etc.) receives the limited mix.
     if (limiterEnabled.load (std::memory_order_relaxed))
     {
-        applyCeiling (masterBus, numSamples);
+        applyPeakLimiter (masterBus, numSamples);
     }
     else
     {
@@ -495,6 +580,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
             }
         }
     }
+
+    masterPlugins_.process (masterBus, emptyMidi);
 
     const float magnitude = juce::jmin (1.0f, masterBus.getMagnitude (0, numSamples));
     const float previous = masterPeak.load (std::memory_order_relaxed);

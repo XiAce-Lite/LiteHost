@@ -13,6 +13,8 @@ public:
     void prepare (double sampleRate, int samplesPerBlock, juce::AudioPlayHead* playHead = nullptr);
     void release();
     void process (juce::AudioBuffer<float>& buffer, const juce::MidiBuffer& incomingMidi) noexcept;
+    /** Deliver panic MIDI (and reset) to every slot, including bypassed. Audio-thread only. */
+    void deliverMidiPanic (const juce::MidiBuffer& panicMidi, int numSamples) noexcept;
     void setPlayHead (juce::AudioPlayHead* newPlayHead);
 
     bool canAdd() const noexcept { return size() < maxPlugins; }

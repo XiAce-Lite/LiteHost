@@ -1,4 +1,5 @@
 #include "MidiLearn.h"
+#include "audio/AudioEngine.h"
 
 MidiLearnManager::MidiLearnManager() = default;
 
@@ -223,7 +224,9 @@ void MidiLearnManager::applyBinding (const MidiLearnBinding& binding, const juce
             {
                 if (! message.isController())
                     return;
-                listener->setLimiterCeilingDb (-12.0f + controllerNorm (message) * 12.0f);
+                listener->setLimiterCeilingDb (AudioEngine::limiterCeilingMinDb
+                    + controllerNorm (message)
+                        * (AudioEngine::limiterCeilingMaxDb - AudioEngine::limiterCeilingMinDb));
                 break;
             }
             case MidiLearnTarget::gateEnabled:

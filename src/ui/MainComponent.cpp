@@ -55,6 +55,7 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
       mixer (engine, *this)
 {
     engineButton.setButtonText (jp (u8"オーディオ停止"));
+    panicButton.setButtonText (jp (u8"パニック"));
     addTrackButton.setButtonText (jp (u8"トラック追加"));
     setLookAndFeel (&lookAndFeel);
     juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
@@ -77,6 +78,10 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
     status.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
 
     engineButton.onClick = [this] { setAudioEngineRunning (! audioEngineRunning); };
+    panicButton.onClick = [this] {
+        engine.requestPanic();
+        status.setText (jp (u8"MIDI パニックを送信しました"), juce::dontSendNotification);
+    };
     addTrackButton.onClick = [this] {
         {
             const juce::ScopedLock sl (engine.getCallbackLock());
@@ -87,7 +92,15 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
         controlSurface.refreshFeedback();
     };
 
+    engineButton.setExplicitFocusOrder (1);
+    panicButton.setExplicitFocusOrder (2);
+    addTrackButton.setExplicitFocusOrder (3);
+    panicButton.setTooltip (jp (u8"鳴り続けているノートを止めます（All Notes Off）"));
+    for (auto* b : { &engineButton, &panicButton, &addTrackButton })
+        b->onStateChange = [this] { repaint(); };
+
     addAndMakeVisible (engineButton);
+    addAndMakeVisible (panicButton);
     addAndMakeVisible (addTrackButton);
 
     trackViewport.setViewedComponent (&trackList, false);
@@ -186,6 +199,13 @@ void MainComponent::paint (juce::Graphics& g)
     g.fillAll (juce::Colour (LiteLookAndFeel::bg));
 }
 
+void MainComponent::paintOverChildren (juce::Graphics& g)
+{
+    HeaderBarButton::paintChrome (g, engineButton);
+    HeaderBarButton::paintChrome (g, panicButton);
+    HeaderBarButton::paintChrome (g, addTrackButton);
+}
+
 void MainComponent::resized()
 {
     auto r = getLocalBounds();
@@ -195,6 +215,7 @@ void MainComponent::resized()
     auto header = r.removeFromTop (44);
     title.setBounds (header.removeFromLeft (110));
     addTrackButton.setBounds (header.removeFromRight (100).reduced (2, 6));
+    panicButton.setBounds (header.removeFromRight (88).reduced (2, 6));
     engineButton.setBounds (header.removeFromRight (100).reduced (2, 6));
     status.setBounds (header.reduced (4, 0));
 
@@ -1024,161 +1045,6 @@ void MainComponent::closeEditorsFor (juce::AudioPluginInstance* plugin)
             editorWindows.remove (i);
 }
 
-void MainComponent::removePluginFromTrack (const juce::Uuid& trackId, int index)
-{
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        if (auto* track = engine.findTrack (trackId))
-        {
-            closeEditorsFor (track->plugins.get (index));
-            track->plugins.remove (index);
-        }
-    }
-    rebuildStrips();
-    markProjectDirty();
-}
-
-void MainComponent::removePluginFromMaster (int index)
-{
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        closeEditorsFor (engine.masterPlugins().get (index));
-        engine.masterPlugins().remove (index);
-    }
-    rebuildStrips();
-    markProjectDirty();
-}
-
-void MainComponent::removeTrack (const juce::Uuid& id)
-{
-    if (auto* track = engine.findTrack (id))
-        for (int i = 0; i < track->plugins.size(); ++i)
-            closeEditorsFor (track->plugins.get (i));
-
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        engine.removeTrack (id);
-    }
-    rebuildStrips();
-    markProjectDirty();
-}
-
-void MainComponent::beginTrackDrag (TrackStrip& strip)
-{
-    startDragging (juce::String (TrackStrip::dragType) + ":" + strip.getTrackId().toString(), &strip);
-}
-
-void MainComponent::beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source)
-{
-    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (&source))
-        container->startDragging (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
-                                      + ":" + juce::String (pluginIndex),
-                                  &source);
-    else
-        startDragging (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
-                           + ":" + juce::String (pluginIndex),
-                       &source);
-}
-
-void MainComponent::beginMasterPluginDrag (int pluginIndex, juce::Component& source)
-{
-    const auto desc = juce::String (TrackStrip::pluginDragType) + ":master:" + juce::String (pluginIndex);
-    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (&source))
-        container->startDragging (desc, &source);
-    else
-        startDragging (desc, &source);
-}
-
-void MainComponent::transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
-                                    const juce::Uuid& toTrackId, int insertIndex)
-{
-    if (! juce::isPositiveAndBelow (pluginIndex, PluginChain::maxPlugins))
-        return;
-
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        auto* from = engine.findTrack (fromTrackId);
-        auto* to = engine.findTrack (toTrackId);
-        if (from == nullptr || to == nullptr)
-            return;
-
-        if (fromTrackId == toTrackId)
-        {
-            if (! from->plugins.move (pluginIndex, insertIndex))
-                return;
-        }
-        else
-        {
-            if (! to->plugins.canAdd())
-            {
-                juce::MessageManager::callAsync ([] {
-                    juce::AlertWindow::showMessageBoxAsync (
-                        juce::AlertWindow::InfoIcon, "LiteHost",
-                        jp (u8"VST はトラック／メインアウトあたり最大 10 個までです。"));
-                });
-                return;
-            }
-
-            bool bypassed = false;
-            auto plugin = from->plugins.take (pluginIndex, bypassed);
-            if (plugin == nullptr)
-                return;
-
-            to->plugins.insertPrepared (insertIndex, std::move (plugin), bypassed);
-        }
-    }
-
-    rebuildStrips();
-    markProjectDirty();
-}
-
-void MainComponent::reorderMasterPlugin (int pluginIndex, int insertIndex)
-{
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        if (! engine.masterPlugins().move (pluginIndex, insertIndex))
-            return;
-    }
-
-    if (masterStrip != nullptr)
-        masterStrip->refreshPlugins();
-    markProjectDirty();
-}
-
-void MainComponent::reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter)
-{
-    if (fromId == targetId)
-        return;
-
-    int from = -1, target = -1;
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        const auto& tracks = engine.tracks();
-        for (int i = 0; i < (int) tracks.size(); ++i)
-        {
-            if (tracks[(size_t) i]->id == fromId)
-                from = i;
-            if (tracks[(size_t) i]->id == targetId)
-                target = i;
-        }
-
-        if (from < 0 || target < 0)
-            return;
-
-        int dest = placeAfter ? target + 1 : target;
-        if (from < dest)
-            --dest;
-
-        if (! engine.moveTrack (from, dest))
-            return;
-
-        midiLearn.trackMoved (from, dest);
-    }
-
-    rebuildStrips();
-    markProjectDirty();
-}
-
 bool MainComponent::applySavedWindowState (juce::ResizableWindow& window)
 {
     if (appSettings.windowState.isEmpty())
@@ -1267,7 +1133,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.1.9");
+                             : juce::String ("0.2.0");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {
@@ -1376,46 +1242,6 @@ void MainComponent::saveAll()
 
     if (auto xml = deviceManager.createStateXml())
         xml->writeTo (AppPaths::audioFile());
-}
-
-juce::String MainComponent::makeStatusText() const
-{
-    juce::String surfaceBit;
-    if (controlSurface.isEnabled())
-        surfaceBit = "  |  " + controlSurfaceProtocolName (controlSurface.getProtocol())
-                   + " bank " + juce::String (controlSurface.getBankOffset() + 1)
-                   + "-" + juce::String (controlSurface.getBankOffset() + ControlSurfaceManager::channelsPerBank);
-
-    if (midiLearn.isEnabled())
-        surfaceBit += jp (u8"  |  MIDI学習");
-    if (midiLearn.isLearning())
-        surfaceBit += jp (u8"(待ち)");
-
-    if (engine.exclusiveSoloMode.load())
-        surfaceBit += jp (u8"  |  Exclusive Solo");
-    if (engine.hasSoloOverride())
-        surfaceBit += jp (u8"  |  Solo Override");
-
-    if (auto* device = deviceManager.getCurrentAudioDevice())
-    {
-        const auto sr = device->getCurrentSampleRate();
-        const auto bs = device->getCurrentBufferSizeSamples();
-        const auto latencyMs = sr > 0.0 ? 1000.0 * (double) (device->getInputLatencyInSamples()
-                                                            + device->getOutputLatencyInSamples()
-                                                            + bs) / sr
-                                        : 0.0;
-        return device->getName() + "  |  "
-             + juce::String (sr / 1000.0, 1) + " kHz  |  "
-             + juce::String (bs) + " samples  |  "
-             + juce::String (latencyMs, 1) + " ms  |  CPU "
-             + juce::String (engine.getCpuPeakLoad() * 100.0f, 0) + "%"
-             + surfaceBit;
-    }
-
-    if (! audioEngineRunning)
-        return jp (u8"オーディオ停止中") + surfaceBit;
-
-    return jp (u8"オーディオデバイスが開かれていません") + surfaceBit;
 }
 
 int MainComponent::indexOfTrack (const TrackProcessor& track) const

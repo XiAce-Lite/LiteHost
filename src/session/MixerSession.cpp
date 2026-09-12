@@ -105,7 +105,9 @@ void MixerSession::setLimiterEnabled (bool enabled, bool notifyUi)
 
 void MixerSession::setLimiterCeilingDb (float db, bool notifyUi)
 {
-    engine.limiterThresholdDb = juce::jlimit (-12.0f, 0.0f, db);
+    engine.limiterThresholdDb = juce::jlimit (AudioEngine::limiterCeilingMinDb,
+                                              AudioEngine::limiterCeilingMaxDb,
+                                              db);
     notifyUiIfNeeded (notifyUi);
 }
 

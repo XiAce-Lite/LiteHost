@@ -59,7 +59,10 @@ bool ProjectStore::loadIntoEngine (const juce::XmlElement& root,
         engine.reverbWet = (float) master->getDoubleAttribute ("wet", 0.18);
         engine.reverbRoom = (float) master->getDoubleAttribute ("room", 0.42);
         engine.reverbDamping = (float) master->getDoubleAttribute ("damping", 0.4);
-        engine.limiterThresholdDb = (float) master->getDoubleAttribute ("ceiling", -0.3);
+        engine.limiterThresholdDb = juce::jlimit (
+            AudioEngine::limiterCeilingMinDb,
+            AudioEngine::limiterCeilingMaxDb,
+            (float) master->getDoubleAttribute ("ceiling", -0.3));
         engine.gateThresholdDb = (float) master->getDoubleAttribute ("gateThreshold", -52.0);
         engine.masterGain = (float) master->getDoubleAttribute ("gain", 1.0);
         restoreChain (engine.masterPlugins(), *master);

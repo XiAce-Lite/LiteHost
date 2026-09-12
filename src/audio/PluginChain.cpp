@@ -223,6 +223,43 @@ void PluginChain::process (juce::AudioBuffer<float>& buffer, const juce::MidiBuf
         processSlot (slot, buffer, incomingMidi);
 }
 
+void PluginChain::deliverMidiPanic (const juce::MidiBuffer& panicMidi, int numSamples) noexcept
+{
+    if (numSamples <= 0 || panicMidi.isEmpty())
+        return;
+
+    if (numSamples > scratch.getNumSamples() || scratch.getNumChannels() < 2)
+        scratch.setSize (maxScratchChannels, numSamples, false, false, true);
+
+    for (auto& slot : slots)
+    {
+        auto* plugin = slot.plugin.get();
+        if (plugin == nullptr)
+            continue;
+
+        refreshSlotChannels (slot);
+        const int pluginChans = juce::jmax (2, juce::jmax (slot.numIns, slot.numOuts));
+        const int useChans = juce::jmin (pluginChans, scratch.getNumChannels());
+        if (useChans <= 0)
+            continue;
+
+        for (int ch = 0; ch < useChans; ++ch)
+            scratch.clear (ch, 0, numSamples);
+
+        juce::MidiBuffer midiCopy (panicMidi);
+        juce::AudioBuffer<float> pluginBuffer (scratch.getArrayOfWritePointers(), useChans, numSamples);
+
+        {
+            const juce::ScopedLock pluginLock (plugin->getCallbackLock());
+            // Bypass/suspend ignored: panic must reach stuck voices.
+            if (! plugin->isSuspended())
+                plugin->processBlock (pluginBuffer, midiCopy);
+        }
+
+        plugin->reset();
+    }
+}
+
 juce::AudioPluginInstance* PluginChain::addPrepared (std::unique_ptr<juce::AudioPluginInstance> plugin)
 {
     if (plugin == nullptr || ! canAdd())

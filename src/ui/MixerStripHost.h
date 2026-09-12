@@ -47,7 +47,7 @@ public:
     virtual void beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source) = 0;
     virtual void beginMasterPluginDrag (int pluginIndex, juce::Component& source) = 0;
     virtual void transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
-                                 const juce::Uuid& toTrackId, int insertIndex) = 0;
+                                 const juce::Uuid& toTrackId, int insertIndex, bool copy) = 0;
     virtual void reorderMasterPlugin (int pluginIndex, int insertIndex) = 0;
     virtual void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter) = 0;
 

@@ -318,9 +318,10 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
         const auto trackToken = body.upToFirstOccurrenceOf (":", false, false);
         const auto indexToken = body.fromFirstOccurrenceOf (":", false, false);
         owner.transferPlugin (juce::Uuid (trackToken), indexToken.getIntValue(),
-                              track.id, insertIndex);
+                              track.id, insertIndex,
+                              juce::ModifierKeys::getCurrentModifiers().isCommandDown());
     };
-    chips.setChipHelpText (jp (u8"クリック: オン/オフ  ダブルクリック: エディタ\nドラッグ: 並べ替え / 他トラックへ移動"));
+    chips.setChipHelpText (jp (u8"クリック: オン/オフ  ダブルクリック: エディタ\nドラッグ: 並べ替え / 他トラックへ移動\nCtrl+ドラッグ: コピー（同トラックでも複製）"));
     addAndMakeVisible (chips);
     addAndMakeVisible (meter);
 
@@ -440,7 +441,8 @@ void TrackStrip::itemDropped (const SourceDetails& details)
         const auto indexToken = body.fromFirstOccurrenceOf (":", false, false);
         // Dropped on the strip body (not the chip list) → append.
         owner.transferPlugin (juce::Uuid (trackToken), indexToken.getIntValue(),
-                              track.id, track.plugins.size());
+                              track.id, track.plugins.size(),
+                              juce::ModifierKeys::getCurrentModifiers().isCommandDown());
         return;
     }
 
@@ -709,8 +711,13 @@ MasterStrip::MasterStrip (MixerStripHost& ownerIn)
     addAndMakeVisible (reverbSizeLabel);
     reverbSizeLabel.setText ("Size", juce::dontSendNotification);
 
-    setupSlider (limitCeiling, -12.0, 0.0, 0.1, (double) owner.getEngine().limiterThresholdDb.load(), " dB");
-    limitCeiling.setTooltip (jp (u8"シーリング。超えたピークだけこの値まで下げる。それ以下は触らない。"));
+    setupSlider (limitCeiling,
+                 (double) AudioEngine::limiterCeilingMinDb,
+                 (double) AudioEngine::limiterCeilingMaxDb,
+                 0.1,
+                 (double) owner.getEngine().limiterThresholdDb.load(),
+                 " dB");
+    limitCeiling.setTooltip (jp (u8"ピーク上限（シーリング）。ルックアヘッド付きで超えたピークだけ滑らかに抑える。"));
     limitCeiling.onValueChange = [this] { owner.getMixer().setLimiterCeilingDb ((float) limitCeiling.getValue(), false); };
     limitCeiling.addMouseListener (&learnClicks, false);
     addAndMakeVisible (limitCeiling);

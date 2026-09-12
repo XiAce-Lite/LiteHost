@@ -15,6 +15,38 @@ class MasterStrip;
 class UpdateChecker;
 class StartupProgress;
 
+/** Hit-target for header actions.
+    Child Button painting is unreliable with the current Direct2D path, so chrome is
+    drawn from MainComponent::paintOverChildren via paintChrome(). */
+class HeaderBarButton : public juce::Button
+{
+public:
+    explicit HeaderBarButton (juce::String name) : juce::Button (std::move (name))
+    {
+        setOpaque (false);
+    }
+
+    void paintButton (juce::Graphics&, bool, bool) override {}
+
+    static void paintChrome (juce::Graphics& g, juce::Button& button)
+    {
+        auto fill = juce::Colour (LiteLookAndFeel::raised);
+        if (button.isDown())
+            fill = fill.darker (0.18f);
+        else if (button.isOver())
+            fill = fill.brighter (0.12f);
+
+        const auto bounds = button.getBounds().toFloat().reduced (0.5f);
+        g.setColour (fill);
+        g.fillRoundedRectangle (bounds, 6.0f);
+        g.setColour (juce::Colour (0xff3a4254));
+        g.drawRoundedRectangle (bounds, 6.0f, 1.0f);
+        g.setColour (juce::Colour (LiteLookAndFeel::text));
+        g.setFont (LiteLookAndFeel::uiFont (14.0f));
+        g.drawText (button.getButtonText(), button.getBounds(), juce::Justification::centred, false);
+    }
+};
+
 class MainComponent : public juce::Component,
                       public juce::DragAndDropContainer,
                       public juce::MenuBarModel,
@@ -28,6 +60,7 @@ public:
     ~MainComponent() override;
 
     void paint (juce::Graphics&) override;
+    void paintOverChildren (juce::Graphics&) override;
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -54,7 +87,7 @@ public:
     void beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source) override;
     void beginMasterPluginDrag (int pluginIndex, juce::Component& source) override;
     void transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
-                         const juce::Uuid& toTrackId, int insertIndex) override;
+                         const juce::Uuid& toTrackId, int insertIndex, bool copy) override;
     void reorderMasterPlugin (int pluginIndex, int insertIndex) override;
     void reorderTrack (const juce::Uuid& fromId, const juce::Uuid& targetId, bool placeAfter) override;
     void applySoloClick (const juce::Uuid& trackId, bool shift) override;
@@ -132,6 +165,8 @@ private:
     void updateWindowTitle();
     void rebuildStrips();
     void attachPlugin (const juce::PluginDescription& description, const juce::Uuid& trackId, bool master);
+    void copyPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
+                     const juce::Uuid& toTrackId, int insertIndex);
     PluginChain::PluginLoadResult loadPluginIntoChain (PluginChain& chain,
                                                        const PluginChain::PluginLoadRequest& request,
                                                        bool suspendBeforePrepare);
@@ -166,8 +201,9 @@ private:
     juce::MenuBarComponent menuBar;
     juce::Label title;
     juce::Label status;
-    juce::TextButton engineButton;
-    juce::TextButton addTrackButton;
+    HeaderBarButton engineButton { "engine" };
+    HeaderBarButton panicButton { "panic" };
+    HeaderBarButton addTrackButton { "addTrack" };
 
     juce::Viewport trackViewport;
     juce::Component trackList;

@@ -25,6 +25,9 @@ public:
 
     void handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message) override;
 
+    /** Queue All Notes Off / All Sound Off for the next audio callback (all tracks + master). */
+    void requestPanic() noexcept;
+
     TrackProcessor* addTrack (juce::String name);
     void removeTrack (const juce::Uuid& id);
     /** Move track at fromIndex to destIndex (after the source has been removed). Caller holds the callback lock. */
@@ -48,6 +51,8 @@ public:
     std::atomic<float> reverbWet { 0.18f };
     std::atomic<float> reverbWidth { 1.0f };
     std::atomic<float> limiterThresholdDb { -0.3f };
+    static constexpr float limiterCeilingMinDb = -4.0f;
+    static constexpr float limiterCeilingMaxDb = 0.0f;
     /** Noise gate open threshold. Kept modest so Max cannot mute a normal performance. */
     std::atomic<float> gateThresholdDb { -52.0f };
     std::atomic<float> masterGain { 1.0f };
@@ -72,17 +77,21 @@ private:
 
     void prepareGraph();
     void updateBuiltInParameters() noexcept;
-    void applyCeiling (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
+    void applyPeakLimiter (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
+    void resetPeakLimiter() noexcept;
     void applyGate (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void copyToOutputs (float* const* outputs, int numOutputChannels, int numSamples) noexcept;
     void applyOutputFadeIn (int numSamples) noexcept;
     void drainPendingMidi (int numSamples) noexcept;
     const juce::MidiBuffer* findDeviceMidi (const juce::String& deviceId) const noexcept;
+    void applyPanicIfNeeded (int numSamples) noexcept;
+    static void buildPanicMidi (juce::MidiBuffer& dest);
 
     HostPlayHead playHead;
     std::vector<std::unique_ptr<TrackProcessor>> tracks_;
     PluginChain masterPlugins_;
     juce::AudioBuffer<float> masterBus;
+    juce::AudioBuffer<float> limiterDelay;
     juce::dsp::Reverb reverb;
     juce::dsp::ProcessSpec spec {};
     juce::CriticalSection callbackLock;
@@ -97,6 +106,7 @@ private:
     std::atomic<float> cpuLoad { 0.0f };
     std::atomic<float> cpuPeakLoad { 0.0f };
     std::atomic<int> trackCount { 0 };
+    std::atomic<bool> panicPending { false };
     float appliedReverbRoom = -1.0f;
     float appliedReverbDamping = -1.0f;
     float appliedReverbWet = -1.0f;
@@ -108,4 +118,9 @@ private:
     float gateEnv = 0.0f;
     float gateGain = 1.0f;
     bool gateOpen = true;
+    int limiterLookAhead = 0;
+    int limiterWrite = 0;
+    float limiterGain = 1.0f;
+    float limiterAttack = 1.0f;
+    float limiterRelease = 1.0f;
 };
