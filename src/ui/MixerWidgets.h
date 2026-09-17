@@ -40,7 +40,7 @@ public:
     /** Visual only: dim individually-on chips while the whole chain is bypassed. */
     void setChainBypassed (bool shouldBypass);
     bool isChainBypassed() const noexcept { return chainBypassed; }
-    /** Hover help under the (optional) truncated name; track vs master differ. */
+    /** Extra hover help under the full plugin name; track vs master differ. */
     void setChipHelpText (juce::String text);
     int getPreferredHeight() const;
     void paint (juce::Graphics& g) override;

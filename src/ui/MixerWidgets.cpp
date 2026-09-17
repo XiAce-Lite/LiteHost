@@ -115,16 +115,9 @@ PluginChipBar::Chip::Chip (PluginChipBar& ownerIn, int indexIn, juce::String nam
 void PluginChipBar::Chip::updateTooltip()
 {
     const auto& help = owner.chipHelpText;
-    const float avail = (float) getWidth() - 16.0f;
-    const auto font = LiteLookAndFeel::uiFont (13.0f);
-    const bool truncated = getWidth() <= 0
-                        || (avail > 0.0f
-                            && juce::GlyphArrangement::getStringWidth (font, name) > avail);
-    // Always lead with the full name when the chip may be clipping it.
-    if (truncated)
-        setTooltip (help.isNotEmpty() ? (name + "\n" + help) : name);
-    else
-        setTooltip (help);
+    // Always lead with the full plugin name so hover works even when the chip
+    // is not judged truncated (short names / measure vs drawText mismatch).
+    setTooltip (help.isNotEmpty() ? (name + "\n" + help) : name);
 }
 
 void PluginChipBar::Chip::paint (juce::Graphics& g)
