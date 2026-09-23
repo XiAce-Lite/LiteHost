@@ -1,4 +1,6 @@
 #include "MidiLearn.h"
+#include "CrashLog.h"
+#include "app/MidiDeviceAccess.h"
 #include "audio/AudioEngine.h"
 
 MidiLearnManager::MidiLearnManager() = default;
@@ -60,8 +62,10 @@ void MidiLearnManager::openPort()
     if (deviceManager == nullptr || ! enabled || inputId.isEmpty())
         return;
 
-    deviceManager->setMidiInputDeviceEnabled (inputId, true);
-    deviceManager->addMidiInputDeviceCallback (inputId, this);
+    if (MidiDeviceAccess::enableInput (*deviceManager, inputId))
+        deviceManager->addMidiInputDeviceCallback (inputId, this);
+    else
+        CrashLog::write ("MIDI learn input skipped: " + inputId);
 }
 
 void MidiLearnManager::applySettings()

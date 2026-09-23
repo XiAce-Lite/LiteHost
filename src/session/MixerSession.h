@@ -26,6 +26,8 @@ public:
     const AudioEngine& getEngine() const noexcept { return engine; }
 
     TrackProcessor* trackAt (int index) const;
+    /** Blocking variant for MIDI / UI writes that must reach a live track. */
+    TrackProcessor* trackAtBlocking (int index) const;
     int indexOfTrack (const TrackProcessor& track) const;
     void applySoloClick (const juce::Uuid& trackId, bool shift);
 

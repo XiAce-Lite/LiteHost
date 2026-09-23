@@ -8,6 +8,21 @@ MixerSession::MixerSession (AudioEngine& engineToUse, Host& hostToUse)
 
 TrackProcessor* MixerSession::trackAt (int index) const
 {
+    // Must not block the message thread waiting for a long audio callback —
+    // Mackie LED refresh runs from a UI timer and would freeze the whole app
+    // (hourglass, stalled CPU meter) when the graph is heavy (Autosave etc.).
+    const juce::ScopedTryLock sl (engine.getCallbackLock());
+    if (! sl.isLocked())
+        return nullptr;
+
+    const auto& tracks = engine.tracks();
+    if (! juce::isPositiveAndBelow (index, (int) tracks.size()))
+        return nullptr;
+    return tracks[(size_t) index].get();
+}
+
+TrackProcessor* MixerSession::trackAtBlocking (int index) const
+{
     const juce::ScopedLock sl (engine.getCallbackLock());
     const auto& tracks = engine.tracks();
     if (! juce::isPositiveAndBelow (index, (int) tracks.size()))
@@ -17,7 +32,10 @@ TrackProcessor* MixerSession::trackAt (int index) const
 
 int MixerSession::indexOfTrack (const TrackProcessor& track) const
 {
-    const juce::ScopedLock sl (engine.getCallbackLock());
+    const juce::ScopedTryLock sl (engine.getCallbackLock());
+    if (! sl.isLocked())
+        return -1;
+
     const auto& tracks = engine.tracks();
     for (int i = 0; i < (int) tracks.size(); ++i)
         if (tracks[(size_t) i].get() == &track)
@@ -184,33 +202,35 @@ bool MixerSession::isAudioEngineRunning() const
 
 void MixerSession::setTrackGain (int trackIndex, float gainLinear)
 {
-    if (auto* track = trackAt (trackIndex))
+    if (auto* track = trackAtBlocking (trackIndex))
         setTrackGain (*track, gainLinear, true);
 }
 
 void MixerSession::setTrackTrim (int trackIndex, float gainLinear)
 {
-    if (auto* track = trackAt (trackIndex))
+    if (auto* track = trackAtBlocking (trackIndex))
         setTrackTrim (*track, gainLinear, true);
 }
 
 void MixerSession::setTrackPan (int trackIndex, float pan)
 {
-    if (auto* track = trackAt (trackIndex))
+    if (auto* track = trackAtBlocking (trackIndex))
         setTrackPan (*track, pan, true);
 }
 
 void MixerSession::setTrackMute (int trackIndex, bool mute)
 {
-    if (auto* track = trackAt (trackIndex))
+    if (auto* track = trackAtBlocking (trackIndex))
         setTrackMute (*track, mute, true);
 }
 
 void MixerSession::setTrackSolo (int trackIndex, bool solo)
 {
-    if (auto* track = trackAt (trackIndex))
+    if (auto* track = trackAtBlocking (trackIndex))
+    {
         engine.setTrackSolo (*track, solo);
-    notifyUiIfNeeded (true);
+        notifyUiIfNeeded (true);
+    }
 }
 
 void MixerSession::setMasterGain (float gainLinear)

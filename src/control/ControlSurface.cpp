@@ -1,4 +1,6 @@
 #include "ControlSurface.h"
+#include "CrashLog.h"
+#include "app/MidiDeviceAccess.h"
 #include <cmath>
 
 namespace
@@ -123,14 +125,20 @@ void ControlSurfaceManager::openPorts()
 
     if (inputId.isNotEmpty())
     {
-        deviceManager->setMidiInputDeviceEnabled (inputId, true);
-        deviceManager->addMidiInputDeviceCallback (inputId, this);
+        if (MidiDeviceAccess::enableInput (*deviceManager, inputId))
+            deviceManager->addMidiInputDeviceCallback (inputId, this);
+        else
+            CrashLog::write ("surface MIDI input skipped: " + inputId);
     }
 
     if (outputId.isNotEmpty())
-        midiOut = juce::MidiOutput::openDevice (outputId);
+    {
+        midiOut = MidiDeviceAccess::openOutput (outputId);
+        if (midiOut == nullptr)
+            CrashLog::write ("surface MIDI output skipped: " + outputId);
+    }
 
-    portsOpen = inputId.isNotEmpty();
+    portsOpen = inputId.isNotEmpty() && deviceManager->isMidiInputDeviceEnabled (inputId);
 }
 
 int ControlSurfaceManager::trackIndexForStrip (int strip) const

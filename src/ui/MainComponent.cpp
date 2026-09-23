@@ -13,6 +13,7 @@
 #include "app/AppPaths.h"
 #include "app/PluginScanCoordinator.h"
 #include "app/ProjectStore.h"
+#include "app/MidiDeviceAccess.h"
 #include "audio/SyncRoomFinder.h"
 #include <algorithm>
 #include <cmath>
@@ -484,6 +485,12 @@ void MainComponent::setupAudio()
     std::unique_ptr<juce::XmlElement> xml (juce::XmlDocument::parse (audioFile));
     const bool firstRun = xml == nullptr;
 
+    // Opening powered-off USB MIDI devices can block forever inside the driver.
+    // Strip MIDIINPUT from the restored setup and re-enable them with a timeout.
+    juce::StringArray pendingMidiInputs;
+    if (xml != nullptr)
+        pendingMidiInputs = MidiDeviceAccess::takeMidiInputIdsFromDeviceSetupXml (*xml);
+
     const auto error = deviceManager.initialise (32, 2, xml.get(), true);
     if (error.isNotEmpty())
         status.setText (error, juce::dontSendNotification);
@@ -492,12 +499,28 @@ void MainComponent::setupAudio()
         applyFirstRunAudioDefaults();
 
     deviceManager.addAudioCallback (&engine);
+
+    juce::StringArray skippedMidi;
+    for (const auto& id : pendingMidiInputs)
+        if (! MidiDeviceAccess::enableInput (deviceManager, id))
+            skippedMidi.add (id);
+
     deviceManager.addMidiInputDeviceCallback ({}, &engine);
     syncTrackMidiInputs();
+
+    if (skippedMidi.size() > 0)
+    {
+        status.setText (jp (u8"応答しない MIDI 入力をスキップしました（電源を確認）: ")
+                            + skippedMidi.joinIntoString (", "),
+                        juce::dontSendNotification);
+        CrashLog::write ("skipped MIDI inputs: " + skippedMidi.joinIntoString (", "));
+    }
 }
 
 void MainComponent::syncTrackMidiInputs()
 {
+    juce::StringArray failed;
+
     for (auto& track : engine.tracks())
     {
         if (track->midiDeviceId.isEmpty())
@@ -506,20 +529,23 @@ void MainComponent::syncTrackMidiInputs()
         if (track->midiDeviceId == AudioEngine::midiAllDevicesId)
         {
             for (const auto& device : juce::MidiInput::getAvailableDevices())
-                deviceManager.setMidiInputDeviceEnabled (device.identifier, true);
+                if (! MidiDeviceAccess::enableInput (deviceManager, device.identifier))
+                    failed.addIfNotAlreadyThere (device.name);
         }
         else
         {
-            deviceManager.setMidiInputDeviceEnabled (track->midiDeviceId, true);
-            if (! deviceManager.isMidiInputDeviceEnabled (track->midiDeviceId))
-                status.setText (jp (u8"MIDI 入力を開けませんでした: ") + track->midiDeviceId,
-                                juce::dontSendNotification);
+            if (! MidiDeviceAccess::enableInput (deviceManager, track->midiDeviceId))
+                failed.addIfNotAlreadyThere (track->midiDeviceId);
         }
     }
 
     // Re-register after enabling so the empty-identifier callback stays active.
     deviceManager.removeMidiInputDeviceCallback ({}, &engine);
     deviceManager.addMidiInputDeviceCallback ({}, &engine);
+
+    if (failed.size() > 0)
+        status.setText (jp (u8"MIDI 入力を開けませんでした: ") + failed.joinIntoString (", "),
+                        juce::dontSendNotification);
 }
 
 void MainComponent::showAudioSettings()
@@ -1135,7 +1161,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.2.4");
+                             : juce::String ("0.2.5");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {
