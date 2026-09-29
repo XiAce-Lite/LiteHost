@@ -3,6 +3,7 @@
 /out/
 /.vs/
 /.idea/
+/.cursor/
 /.cache/
 /CMakeUserPresets.json
 compile_commands.json
