@@ -176,15 +176,20 @@ void ControlSurfaceManager::refreshFeedback()
     if (protocol != ControlSurfaceProtocol::mackieControl)
         return;
 
-    for (int strip = 0; strip < channelsPerBank; ++strip)
+    // A missed audio-callback lock used to read mute/solo as off and velocity 0,
+    // which blinks the surface LEDs. Skip the strip mirror and keep the last state.
+    ControlSurfaceStripFeedback strips[channelsPerBank];
+    if (listener->tryCopyStripFeedback (bankOffset, channelsPerBank, strips))
     {
-        const int track = trackIndexForStrip (strip);
-        const bool hasTrack = track < listener->getNumTracks();
-        sendNoteFeedback (kMuteBase + strip, hasTrack && listener->getTrackMute (track));
-        sendNoteFeedback (kSoloBase + strip, hasTrack && listener->getTrackSolo (track));
+        for (int strip = 0; strip < channelsPerBank; ++strip)
+        {
+            const auto& state = strips[strip];
+            sendNoteFeedback (kMuteBase + strip, state.present && state.mute);
+            sendNoteFeedback (kSoloBase + strip, state.present && state.solo);
 
-        const int faderValue = hasTrack ? gainToFader14 (listener->getTrackGain (track)) : 0;
-        midiOut->sendMessageNow (juce::MidiMessage::pitchWheel (strip + 1, faderValue));
+            const int faderValue = state.present ? gainToFader14 (state.gain) : 0;
+            midiOut->sendMessageNow (juce::MidiMessage::pitchWheel (strip + 1, faderValue));
+        }
     }
 
     midiOut->sendMessageNow (juce::MidiMessage::pitchWheel (9, gainToFader14 (listener->getMasterGain())));

@@ -55,6 +55,7 @@ public:
     float getTrackPan (int trackIndex) const override;
     bool getTrackMute (int trackIndex) const override;
     bool getTrackSolo (int trackIndex) const override;
+    bool tryCopyStripFeedback (int bankOffset, int count, ControlSurfaceStripFeedback* out) const override;
     float getMasterGain() const override;
     bool isAudioEngineRunning() const override;
     void setTrackGain (int trackIndex, float gainLinear) override;
@@ -80,6 +81,14 @@ public:
 
 private:
     void notifyUiIfNeeded (bool notifyUi);
+
+    /** Blocking track lookup shared by control-surface and MIDI-learn writes. */
+    template <typename Fn>
+    void editTrackBlocking (int index, Fn&& fn)
+    {
+        if (auto* track = trackAtBlocking (index))
+            fn (*track);
+    }
 
     AudioEngine& engine;
     Host& host;

@@ -832,14 +832,20 @@ void MainComponent::pruneMissingPlugins()
     }
 }
 
+PluginChain* MainComponent::pluginChainFor (const juce::Uuid& trackId, bool master)
+{
+    if (master)
+        return &engine.masterPlugins();
+
+    if (auto* track = engine.findTrack (trackId))
+        return &track->plugins;
+
+    return nullptr;
+}
+
 void MainComponent::promptAddPlugin (const juce::Uuid& trackId, bool master)
 {
-    PluginChain* chain = nullptr;
-    if (master)
-        chain = &engine.masterPlugins();
-    else if (auto* track = engine.findTrack (trackId))
-        chain = &track->plugins;
-
+    auto* chain = pluginChainFor (trackId, master);
     if (chain == nullptr)
         return;
 
@@ -898,12 +904,7 @@ PluginChain::PluginLoadResult MainComponent::loadPluginIntoChain (PluginChain& c
 
 void MainComponent::attachPlugin (const juce::PluginDescription& description, const juce::Uuid& trackId, bool master)
 {
-    PluginChain* chain = nullptr;
-    if (master)
-        chain = &engine.masterPlugins();
-    else if (auto* track = engine.findTrack (trackId))
-        chain = &track->plugins;
-
+    auto* chain = pluginChainFor (trackId, master);
     if (chain == nullptr || ! chain->canAdd())
     {
         juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon, "LiteHost",
@@ -916,12 +917,7 @@ void MainComponent::attachPlugin (const juce::PluginDescription& description, co
         if (safe == nullptr)
             return;
 
-        PluginChain* chain = nullptr;
-        if (master)
-            chain = &safe->engine.masterPlugins();
-        else if (auto* track = safe->engine.findTrack (trackId))
-            chain = &track->plugins;
-
+        auto* chain = safe->pluginChainFor (trackId, master);
         if (chain == nullptr || ! chain->canAdd())
             return;
 
@@ -1161,7 +1157,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.2.5");
+                             : juce::String ("0.2.6");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {

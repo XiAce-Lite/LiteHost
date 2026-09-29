@@ -165,6 +165,10 @@ private:
     void updateWindowTitle();
     void rebuildStrips();
     void attachPlugin (const juce::PluginDescription& description, const juce::Uuid& trackId, bool master);
+    /** Master chain when master is true; otherwise the track chain. Null if the track is gone. */
+    PluginChain* pluginChainFor (const juce::Uuid& trackId, bool master);
+    void removePluginFromChain (const juce::Uuid& trackId, bool master, int index);
+    void startPluginDrag (const juce::String& description, juce::Component& source);
     void copyPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
                      const juce::Uuid& toTrackId, int insertIndex);
     PluginChain::PluginLoadResult loadPluginIntoChain (PluginChain& chain,

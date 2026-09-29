@@ -29,6 +29,15 @@ inline ControlSurfaceProtocol controlSurfaceProtocolFromName (const juce::String
     return ControlSurfaceProtocol::mackieControl;
 }
 
+/** One strip of mixer state mirrored to a control surface. */
+struct ControlSurfaceStripFeedback
+{
+    bool present = false;
+    bool mute = false;
+    bool solo = false;
+    float gain = 1.0f;
+};
+
 /** Host-facing actions a control surface can request. */
 class ControlSurfaceListener
 {
@@ -40,6 +49,9 @@ public:
     virtual float getTrackPan (int trackIndex) const = 0;
     virtual bool getTrackMute (int trackIndex) const = 0;
     virtual bool getTrackSolo (int trackIndex) const = 0;
+    /** Copies mute, solo, and fader for strips starting at bankOffset.
+        Returns false when the audio callback lock is busy; out is left unchanged. */
+    virtual bool tryCopyStripFeedback (int bankOffset, int count, ControlSurfaceStripFeedback* out) const = 0;
     virtual float getMasterGain() const = 0;
     virtual bool isAudioEngineRunning() const = 0;
 

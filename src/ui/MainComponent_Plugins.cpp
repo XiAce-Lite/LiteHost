@@ -3,29 +3,28 @@
 #include "Utf8.h"
 #include "control/ControlSurface.h"
 
-void MainComponent::removePluginFromTrack (const juce::Uuid& trackId, int index)
+void MainComponent::removePluginFromChain (const juce::Uuid& trackId, bool master, int index)
 {
     {
         const juce::ScopedLock sl (engine.getCallbackLock());
-        if (auto* track = engine.findTrack (trackId))
+        if (auto* chain = pluginChainFor (trackId, master))
         {
-            closeEditorsFor (track->plugins.get (index));
-            track->plugins.remove (index);
+            closeEditorsFor (chain->get (index));
+            chain->remove (index);
         }
     }
     rebuildStrips();
     markProjectDirty();
 }
 
+void MainComponent::removePluginFromTrack (const juce::Uuid& trackId, int index)
+{
+    removePluginFromChain (trackId, false, index);
+}
+
 void MainComponent::removePluginFromMaster (int index)
 {
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        closeEditorsFor (engine.masterPlugins().get (index));
-        engine.masterPlugins().remove (index);
-    }
-    rebuildStrips();
-    markProjectDirty();
+    removePluginFromChain ({}, true, index);
 }
 
 void MainComponent::removeTrack (const juce::Uuid& id)
@@ -47,25 +46,25 @@ void MainComponent::beginTrackDrag (TrackStrip& strip)
     startDragging (juce::String (TrackStrip::dragType) + ":" + strip.getTrackId().toString(), &strip);
 }
 
-void MainComponent::beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source)
+void MainComponent::startPluginDrag (const juce::String& description, juce::Component& source)
 {
     if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (&source))
-        container->startDragging (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
-                                      + ":" + juce::String (pluginIndex),
-                                  &source);
+        container->startDragging (description, &source);
     else
-        startDragging (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
-                           + ":" + juce::String (pluginIndex),
-                       &source);
+        startDragging (description, &source);
+}
+
+void MainComponent::beginPluginDrag (const juce::Uuid& trackId, int pluginIndex, juce::Component& source)
+{
+    startPluginDrag (juce::String (TrackStrip::pluginDragType) + ":" + trackId.toString()
+                         + ":" + juce::String (pluginIndex),
+                     source);
 }
 
 void MainComponent::beginMasterPluginDrag (int pluginIndex, juce::Component& source)
 {
-    const auto desc = juce::String (TrackStrip::pluginDragType) + ":master:" + juce::String (pluginIndex);
-    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (&source))
-        container->startDragging (desc, &source);
-    else
-        startDragging (desc, &source);
+    startPluginDrag (juce::String (TrackStrip::pluginDragType) + ":master:" + juce::String (pluginIndex),
+                     source);
 }
 
 void MainComponent::transferPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
@@ -192,7 +191,8 @@ void MainComponent::reorderMasterPlugin (int pluginIndex, int insertIndex)
 {
     {
         const juce::ScopedLock sl (engine.getCallbackLock());
-        if (! engine.masterPlugins().move (pluginIndex, insertIndex))
+        auto* chain = pluginChainFor ({}, true);
+        if (chain == nullptr || ! chain->move (pluginIndex, insertIndex))
             return;
     }
 

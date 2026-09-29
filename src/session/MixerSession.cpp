@@ -190,6 +190,38 @@ bool MixerSession::getTrackSolo (int trackIndex) const
     return false;
 }
 
+bool MixerSession::tryCopyStripFeedback (int bankOffset, int count, ControlSurfaceStripFeedback* out) const
+{
+    if (out == nullptr || count <= 0)
+        return true;
+
+    const juce::ScopedTryLock sl (engine.getCallbackLock());
+    if (! sl.isLocked())
+        return false;
+
+    const auto& tracks = engine.tracks();
+    const int numTracks = (int) tracks.size();
+
+    for (int i = 0; i < count; ++i)
+    {
+        auto& slot = out[i];
+        const int index = bankOffset + i;
+        if (! juce::isPositiveAndBelow (index, numTracks) || tracks[(size_t) index] == nullptr)
+        {
+            slot = {};
+            continue;
+        }
+
+        const auto& track = *tracks[(size_t) index];
+        slot.present = true;
+        slot.mute = track.mute.load (std::memory_order_relaxed);
+        slot.solo = track.solo.load (std::memory_order_relaxed);
+        slot.gain = track.gain.load (std::memory_order_relaxed);
+    }
+
+    return true;
+}
+
 float MixerSession::getMasterGain() const
 {
     return engine.masterGain.load();
@@ -202,35 +234,38 @@ bool MixerSession::isAudioEngineRunning() const
 
 void MixerSession::setTrackGain (int trackIndex, float gainLinear)
 {
-    if (auto* track = trackAtBlocking (trackIndex))
-        setTrackGain (*track, gainLinear, true);
+    editTrackBlocking (trackIndex, [this, gainLinear] (TrackProcessor& track) {
+        setTrackGain (track, gainLinear, true);
+    });
 }
 
 void MixerSession::setTrackTrim (int trackIndex, float gainLinear)
 {
-    if (auto* track = trackAtBlocking (trackIndex))
-        setTrackTrim (*track, gainLinear, true);
+    editTrackBlocking (trackIndex, [this, gainLinear] (TrackProcessor& track) {
+        setTrackTrim (track, gainLinear, true);
+    });
 }
 
 void MixerSession::setTrackPan (int trackIndex, float pan)
 {
-    if (auto* track = trackAtBlocking (trackIndex))
-        setTrackPan (*track, pan, true);
+    editTrackBlocking (trackIndex, [this, pan] (TrackProcessor& track) {
+        setTrackPan (track, pan, true);
+    });
 }
 
 void MixerSession::setTrackMute (int trackIndex, bool mute)
 {
-    if (auto* track = trackAtBlocking (trackIndex))
-        setTrackMute (*track, mute, true);
+    editTrackBlocking (trackIndex, [this, mute] (TrackProcessor& track) {
+        setTrackMute (track, mute, true);
+    });
 }
 
 void MixerSession::setTrackSolo (int trackIndex, bool solo)
 {
-    if (auto* track = trackAtBlocking (trackIndex))
-    {
-        engine.setTrackSolo (*track, solo);
+    editTrackBlocking (trackIndex, [this, solo] (TrackProcessor& track) {
+        engine.setTrackSolo (track, solo);
         notifyUiIfNeeded (true);
-    }
+    });
 }
 
 void MixerSession::setMasterGain (float gainLinear)
