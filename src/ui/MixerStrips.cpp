@@ -135,8 +135,15 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
     name.setFont (LiteLookAndFeel::uiFont (14.0f));
     name.setJustificationType (juce::Justification::centred);
     name.setEditable (false, true, false);
-    name.setTooltip (jp (u8"ドラッグで順を変更 / ダブルクリックで名前変更"));
-    name.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    if (track.isReturn)
+    {
+        name.setTooltip (jp (u8"ダブルクリックで名前変更"));
+    }
+    else
+    {
+        name.setTooltip (jp (u8"ドラッグで順を変更 / ダブルクリックで名前変更"));
+        name.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    }
     name.addMouseListener (this, false);
     name.setColour (juce::Label::backgroundColourId, juce::Colour (LiteLookAndFeel::raised));
     name.setColour (juce::Label::outlineColourId, juce::Colour (0xff3a4254));
@@ -153,9 +160,12 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
     };
     addAndMakeVisible (name);
 
-    dragGrip.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
-    dragGrip.addMouseListener (this, false);
-    addAndMakeVisible (dragGrip);
+    if (! track.isReturn)
+    {
+        dragGrip.setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+        dragGrip.addMouseListener (this, false);
+        addAndMakeVisible (dragGrip);
+    }
 
     input.setTextWhenNoChoicesAvailable (jp (u8"入力なし"));
     input.onChange = [this] {
@@ -199,7 +209,16 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
         owner.getEngine().setTrackMidiDevice (track, {});
         owner.markProjectDirty();
     };
-    addAndMakeVisible (input);
+    if (track.isReturn)
+    {
+        sourceLabel.setJustificationType (juce::Justification::centred);
+        sourceLabel.setColour (juce::Label::textColourId, juce::Colour (LiteLookAndFeel::muted));
+        addAndMakeVisible (sourceLabel);
+    }
+    else
+    {
+        addAndMakeVisible (input);
+    }
 
     mute.setClickingTogglesState (true);
     mute.setButtonText ("M");
@@ -217,7 +236,8 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
         owner.applySoloClick (track.id, juce::ModifierKeys::getCurrentModifiers().isShiftDown());
     };
     solo.addMouseListener (&learnClicks, false);
-    addAndMakeVisible (solo);
+    if (! track.isReturn)
+        addAndMakeVisible (solo);
     updateSoloButton();
 
     vstToggle.setToggleState (! track.plugins.isChainBypassed(), juce::dontSendNotification);
@@ -289,13 +309,18 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
     addAndMakeVisible (pan);
 
     addFx.setButtonText ("+ VST");
-    addFx.setTooltip (jp (u8"トラックに VST3 を追加（最大 10）"));
+    addFx.setTooltip (track.isReturn ? jp (u8"リターンに VST3 を追加（最大 10）")
+                                     : jp (u8"トラックに VST3 を追加（最大 10）"));
     addFx.onClick = [this] { owner.promptAddPlugin (track.id, false); };
     addAndMakeVisible (addFx);
 
-    remove.setButtonText (jp (u8"Tr削除"));
+    remove.setButtonText (track.isReturn ? jp (u8"削除") : jp (u8"Tr削除"));
+    if (track.isReturn)
+        remove.setTooltip (jp (u8"このリターンを削除（各トラックの該当センドも消える）"));
     remove.onClick = [this] { owner.removeTrack (track.id); };
     addAndMakeVisible (remove);
+
+    createSendKnobs();
 
     chips.onOpen = [this] (int index) {
         if (auto* plugin = track.plugins.get (index))
@@ -334,19 +359,23 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
 void TrackStrip::paint (juce::Graphics& g)
 {
     auto r = getLocalBounds().toFloat().reduced (4.0f, 4.0f);
-    g.setColour (juce::Colour (LiteLookAndFeel::surface));
+    const auto fill = juce::Colour (LiteLookAndFeel::surface);
+    g.setColour (track.isReturn ? fill.interpolatedWith (juce::Colour (LiteLookAndFeel::accent), 0.08f) : fill);
     g.fillRoundedRectangle (r, 8.0f);
-    g.setColour (juce::Colour (0xff2c3344));
+    g.setColour (track.isReturn ? juce::Colour (LiteLookAndFeel::accent).withAlpha (0.45f) : juce::Colour (0xff2c3344));
     g.drawRoundedRectangle (r, 8.0f, 1.0f);
 
-    const auto grip = dragGrip.getBounds().toFloat().reduced (3.0f, 10.0f);
-    g.setColour (juce::Colour (LiteLookAndFeel::muted).withAlpha (0.55f));
-    const float x0 = grip.getX();
-    const float x1 = x0 + 5.0f;
-    for (float y = grip.getY(); y + 3.0f < grip.getBottom(); y += 6.0f)
+    if (! track.isReturn)
     {
-        g.fillRoundedRectangle (x0, y, 3.0f, 3.0f, 1.0f);
-        g.fillRoundedRectangle (x1, y, 3.0f, 3.0f, 1.0f);
+        const auto grip = dragGrip.getBounds().toFloat().reduced (3.0f, 10.0f);
+        g.setColour (juce::Colour (LiteLookAndFeel::muted).withAlpha (0.55f));
+        const float x0 = grip.getX();
+        const float x1 = x0 + 5.0f;
+        for (float y = grip.getY(); y + 3.0f < grip.getBottom(); y += 6.0f)
+        {
+            g.fillRoundedRectangle (x0, y, 3.0f, 3.0f, 1.0f);
+            g.fillRoundedRectangle (x1, y, 3.0f, 3.0f, 1.0f);
+        }
     }
 
     if (dropBefore || dropAfter)
@@ -385,6 +414,9 @@ void TrackStrip::mouseDrag (const juce::MouseEvent& e)
 
 bool TrackStrip::isTrackDragSource (const juce::Component* component) const noexcept
 {
+    if (track.isReturn)
+        return false;
+
     return component == this
         || component == &name
         || component == &dragGrip
@@ -395,6 +427,8 @@ bool TrackStrip::isTrackDragSource (const juce::Component* component) const noex
 bool TrackStrip::isInterestedInDragSource (const SourceDetails& details)
 {
     const auto desc = details.description.toString();
+    if (track.isReturn)
+        return desc.startsWith (pluginDragType);
     return desc.startsWith (dragType) || desc.startsWith (pluginDragType);
 }
 
@@ -464,12 +498,21 @@ void TrackStrip::resized()
     r.removeFromLeft (4);
     name.setBounds (r.removeFromTop (28));
     r.removeFromTop (6);
-    input.setBounds (r.removeFromTop (28));
+    const auto inputRow = r.removeFromTop (28);
+    input.setBounds (inputRow);
+    sourceLabel.setBounds (inputRow);
     r.removeFromTop (6);
 
     auto ms = r.removeFromTop (28);
-    mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2).reduced (1, 0));
-    solo.setBounds (ms.reduced (1, 0));
+    if (track.isReturn)
+    {
+        mute.setBounds (ms.reduced (1, 0));
+    }
+    else
+    {
+        mute.setBounds (ms.removeFromLeft (ms.getWidth() / 2).reduced (1, 0));
+        solo.setBounds (ms.reduced (1, 0));
+    }
     r.removeFromTop (4);
 
     auto knobRow = r.removeFromTop (72);
@@ -481,7 +524,23 @@ void TrackStrip::resized()
     pan.setBounds (panCol);
     r.removeFromTop (4);
 
-    auto meterRow = r.removeFromTop (168);
+    int faderHeight = 168;
+    if (! sendKnobs.isEmpty())
+    {
+        constexpr int sendRowHeight = 46;
+        auto sendRow = r.removeFromTop (sendRowHeight);
+        const int cellW = sendRow.getWidth() / TrackProcessor::maxSends;
+        for (int i = 0; i < sendKnobs.size(); ++i)
+        {
+            auto cell = sendRow.removeFromLeft (cellW);
+            sendLabels[i]->setBounds (cell.removeFromTop (13));
+            sendKnobs[i]->setBounds (cell);
+        }
+        r.removeFromTop (4);
+        faderHeight -= 30;
+    }
+
+    auto meterRow = r.removeFromTop (faderHeight);
     meter.setBounds (meterRow.removeFromRight (14).reduced (0, 4));
     gain.setBounds (meterRow);
 
@@ -513,6 +572,11 @@ void TrackStrip::resized()
     assignFocusOrder (solo, order);
     assignSliderFocusOrder (trim, order);
     assignSliderFocusOrder (pan, order);
+    for (auto* knob : sendKnobs)
+    {
+        knob->setWantsKeyboardFocus (true);
+        knob->setExplicitFocusOrder (order++);
+    }
     assignSliderFocusOrder (gain, order);
     assignFocusOrder (vstToggle, order);
     chips.setExplicitFocusOrder (order++);
@@ -522,6 +586,14 @@ void TrackStrip::resized()
 
 void TrackStrip::refreshInputs()
 {
+    if (track.isReturn)
+    {
+        const int index = owner.getEngine().indexOfReturn (track);
+        sourceLabel.setText (jp (u8"入力: センド ") + juce::String::charToString ((juce::juce_wchar) ('A' + juce::jmax (0, index))),
+                             juce::dontSendNotification);
+        return;
+    }
+
     input.clear (juce::dontSendNotification);
     input.addItem (jp (u8"(入力なし)"), 1);
 
@@ -632,12 +704,119 @@ void TrackStrip::syncFromTrack()
     trim.setValue ((double) juce::Decibels::gainToDecibels (track.trim.load(), -24.0f),
                    juce::dontSendNotification);
     pan.setValue ((double) track.pan.load(), juce::dontSendNotification);
+    for (int i = 0; i < sendKnobs.size(); ++i)
+    {
+        sendKnobs[i]->setValue ((double) juce::Decibels::gainToDecibels (track.sendLevel[i].load(), sendOffDb),
+                                juce::dontSendNotification);
+        updateSendLabel (i);
+    }
     refreshInputs();
+}
+
+void TrackStrip::createSendKnobs()
+{
+    if (track.isReturn)
+        return;
+
+    const int numReturns = (int) owner.getEngine().returns().size();
+    for (int i = 0; i < numReturns; ++i)
+    {
+        auto* label = sendLabels.add (new juce::Label());
+        label->setJustificationType (juce::Justification::centred);
+        label->setFont (LiteLookAndFeel::uiFont (11.0f));
+        label->setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (label);
+
+        auto* knob = sendKnobs.add (new juce::Slider());
+        knob->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+        knob->setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+        knob->setRange ((double) sendOffDb, 6.0, 0.1);
+        knob->setSkewFactorFromMidPoint (-12.0);
+        knob->setDoubleClickReturnValue (true, (double) sendOffDb);
+        knob->setPopupDisplayEnabled (true, true, nullptr);
+        knob->setWantsKeyboardFocus (false);
+        knob->getProperties().set ("noCentreMark", true);
+        knob->textFromValueFunction = [] (double v) {
+            return v <= (double) sendOffDb ? juce::String ("-inf") : juce::String (v, 1) + " dB";
+        };
+        knob->setValue ((double) juce::Decibels::gainToDecibels (track.sendLevel[i].load(), sendOffDb),
+                        juce::dontSendNotification);
+        knob->onValueChange = [this, i, knob] {
+            const auto db = (float) knob->getValue();
+            track.sendLevel[i] = db <= sendOffDb ? 0.0f : juce::Decibels::decibelsToGain (db);
+            owner.markProjectDirty();
+        };
+        knob->addMouseListener (&learnClicks, false);
+        addAndMakeVisible (knob);
+        updateSendLabel (i);
+    }
+}
+
+void TrackStrip::updateSendLabel (int index)
+{
+    if (! juce::isPositiveAndBelow (index, sendLabels.size()))
+        return;
+
+    const bool pre = track.sendPreFader[index].load();
+    const auto letter = juce::String::charToString ((juce::juce_wchar) ('A' + index));
+    sendLabels[index]->setText (pre ? letter + " pre" : letter, juce::dontSendNotification);
+    sendLabels[index]->setColour (juce::Label::textColourId,
+                                  juce::Colour (pre ? LiteLookAndFeel::soloOverride : LiteLookAndFeel::muted));
+
+    juce::String returnName;
+    const auto& returns = owner.getEngine().returns();
+    if (juce::isPositiveAndBelow (index, (int) returns.size()))
+        returnName = returns[(size_t) index]->name;
+
+    sendKnobs[index]->setTooltip (jp (u8"センド ") + letter + jp (u8" → ") + returnName
+                                  + (pre ? jp (u8"（プリフェーダー）") : jp (u8"（ポストフェーダー）"))
+                                  + jp (u8"\nダブルクリック: オフ  右クリック: プリ／ポスト切替"));
+}
+
+void TrackStrip::showSendMenu (int index)
+{
+    if (! juce::isPositiveAndBelow (index, sendKnobs.size()))
+        return;
+
+    const bool pre = track.sendPreFader[index].load();
+    juce::PopupMenu menu;
+    menu.addItem (1, jp (u8"ポストフェーダー（フェーダーに連動）"), true, ! pre);
+    menu.addItem (2, jp (u8"プリフェーダー（フェーダーに関係なく送る）"), true, pre);
+    menu.addSeparator();
+    menu.addItem (3, jp (u8"センドをオフ"));
+
+    menu.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (sendKnobs[index]),
+                        [safe = juce::Component::SafePointer<TrackStrip> (this), index] (int result) {
+                            if (safe == nullptr || result == 0)
+                                return;
+
+                            if (result == 3)
+                            {
+                                safe->sendKnobs[index]->setValue ((double) sendOffDb, juce::sendNotificationSync);
+                                return;
+                            }
+
+                            safe->track.sendPreFader[index] = (result == 2);
+                            safe->updateSendLabel (index);
+                            safe->owner.markProjectDirty();
+                        });
 }
 
 void TrackStrip::LearnClickListener::mouseDown (const juce::MouseEvent& e)
 {
     if (! e.mods.isPopupMenu())
+        return;
+
+    for (int i = 0; i < strip.sendKnobs.size(); ++i)
+    {
+        if (e.eventComponent == strip.sendKnobs[i])
+        {
+            strip.showSendMenu (i);
+            return;
+        }
+    }
+
+    if (strip.track.isReturn)
         return;
 
     MidiLearnTarget target = MidiLearnTarget::gain;
@@ -655,6 +834,72 @@ void TrackStrip::LearnClickListener::mouseDown (const juce::MouseEvent& e)
         return;
 
     strip.owner.showLearnMenuForTrack (strip.owner.indexOfTrack (strip.track), target);
+}
+
+void ReturnsBar::setState (int numReturns, bool isCollapsed)
+{
+    collapsed = isCollapsed;
+
+    while (meters.size() > numReturns)
+        meters.removeLast();
+    while (meters.size() < numReturns)
+        addChildComponent (meters.add (new LevelMeter()));
+
+    for (auto* meter : meters)
+    {
+        meter->setVisible (collapsed);
+        meter->setInterceptsMouseClicks (false, false);
+    }
+
+    setTooltip (collapsed ? jp (u8"クリックでリターンを表示") : jp (u8"クリックでリターンを畳む"));
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setRepaintsOnMouseActivity (true);
+    resized();
+    repaint();
+}
+
+void ReturnsBar::setPeak (int index, float value)
+{
+    if (juce::isPositiveAndBelow (index, meters.size()))
+        meters[index]->update (value);
+}
+
+void ReturnsBar::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (2.0f, 4.0f);
+    g.setColour (juce::Colour (LiteLookAndFeel::raised).withAlpha (isMouseOver() ? 1.0f : 0.7f));
+    g.fillRoundedRectangle (r, 5.0f);
+
+    g.setColour (juce::Colour (LiteLookAndFeel::muted));
+    g.setFont (LiteLookAndFeel::uiFont (12.0f));
+    auto top = r.removeFromTop (22.0f);
+    g.drawText (collapsed ? juce::String::fromUTF8 ("\xe2\x97\x80") : juce::String::fromUTF8 ("\xe2\x96\xb6"),
+                top, juce::Justification::centred, false);
+
+    const juce::String label ("RETURN");
+    const float lineH = 13.0f;
+    auto text = r.removeFromTop (lineH * (float) label.length());
+    for (int i = 0; i < label.length(); ++i)
+        g.drawText (label.substring (i, i + 1),
+                    text.removeFromTop (lineH), juce::Justification::centred, false);
+}
+
+void ReturnsBar::resized()
+{
+    if (meters.isEmpty())
+        return;
+
+    auto r = getLocalBounds().reduced (3, 4);
+    r.removeFromTop (22 + 13 * 6 + 8);
+    const int w = juce::jmax (2, r.getWidth() / meters.size());
+    for (auto* meter : meters)
+        meter->setBounds (r.removeFromLeft (w).reduced (1, 0));
+}
+
+void ReturnsBar::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && onToggle != nullptr)
+        onToggle();
 }
 
 MasterStrip::MasterStrip (MixerStripHost& ownerIn)

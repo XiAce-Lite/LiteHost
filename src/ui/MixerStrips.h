@@ -10,6 +10,8 @@ class TrackStrip : public juce::Component,
 {
 public:
     static constexpr int stripWidth = 184;
+    /** Send knob floor; at or below this the send is off. */
+    static constexpr float sendOffDb = -60.0f;
     static constexpr const char* dragType = "litehost-track";
     static constexpr const char* pluginDragType = "litehost-plugin";
 
@@ -34,6 +36,9 @@ public:
 private:
     bool isTrackDragSource (const juce::Component* component) const noexcept;
     void updateSoloButton();
+    void createSendKnobs();
+    void updateSendLabel (int index);
+    void showSendMenu (int index);
 
     MixerStripHost& owner;
     TrackProcessor& track;
@@ -45,16 +50,41 @@ private:
     };
     LearnClickListener learnClicks { *this };
     juce::Label name, panLabel, trimLabel;
+    /** Return strips: fixed "from send X" caption in place of the input combo. */
+    juce::Label sourceLabel;
     juce::Component dragGrip;
     juce::ComboBox input;
     juce::TextButton mute, solo, addFx, remove;
     ChainPowerButton vstToggle;
     juce::Slider gain, pan, trim;
+    /** One per return bus; empty on return strips. */
+    juce::OwnedArray<juce::Slider> sendKnobs;
+    juce::OwnedArray<juce::Label> sendLabels;
     PluginChipList chips;
     LevelMeter meter;
     bool dropBefore = false;
     bool dropAfter = false;
     bool pluginDropHighlight = false;
+};
+
+/** Thin handle between tracks and return buses. Click toggles the return area; meters show while collapsed. */
+class ReturnsBar : public juce::Component,
+                   public juce::SettableTooltipClient
+{
+public:
+    static constexpr int barWidth = 22;
+
+    std::function<void()> onToggle;
+
+    void setState (int numReturns, bool isCollapsed);
+    void setPeak (int index, float value);
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+    void mouseUp (const juce::MouseEvent& e) override;
+
+private:
+    juce::OwnedArray<LevelMeter> meters;
+    bool collapsed = false;
 };
 
 class MasterStrip : public juce::Component

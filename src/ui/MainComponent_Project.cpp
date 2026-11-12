@@ -103,6 +103,8 @@ void MainComponent::clearProjectState()
     editorWindows.clear();
     strips.clear();
     trackList.removeAllChildren();
+    returnStrips.clear();
+    returnList.removeAllChildren();
 
     engine.editGraph ([this] (DetachedObjects& detached) { engine.clearTracksAndMaster (detached); });
 

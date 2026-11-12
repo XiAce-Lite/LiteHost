@@ -334,8 +334,9 @@ juce::Label* LiteLookAndFeel::createSliderTextBox (juce::Slider& slider)
 }
 
 void LiteLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
-                                        const float rotaryStartAngle, const float rotaryEndAngle, juce::Slider&)
+                                        const float rotaryStartAngle, const float rotaryEndAngle, juce::Slider& slider)
 {
+    const bool centreMark = ! (bool) slider.getProperties()["noCentreMark"];
     const auto bounds = juce::Rectangle<float> ((float) x, (float) y, (float) width, (float) height).reduced (3.0f);
     const float radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f - 2.0f;
     const float cx = bounds.getCentreX();
@@ -352,8 +353,11 @@ void LiteLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int wid
     g.setColour (juce::Colour (muted));
     g.drawEllipse (cx - radius, cy - radius, radius * 2.0f, radius * 2.0f, 1.4f);
 
-    g.setColour (juce::Colour (text));
-    g.drawLine (spoke (midAngle, radius - 6.0f, radius + 1.0f), 1.6f);
+    if (centreMark)
+    {
+        g.setColour (juce::Colour (text));
+        g.drawLine (spoke (midAngle, radius - 6.0f, radius + 1.0f), 1.6f);
+    }
 
     g.setColour (juce::Colour (text).withAlpha (0.92f));
     g.drawLine (spoke (valueAngle, 4.0f, radius - 5.0f), 1.8f);

@@ -12,6 +12,7 @@ class PluginEditorWindow;
 class PluginScanThread;
 class TrackStrip;
 class MasterStrip;
+class ReturnsBar;
 class UpdateChecker;
 class StartupProgress;
 
@@ -129,7 +130,8 @@ private:
         menuSurfaceSettings,
         menuMidiLearnSettings,
         menuVstScan,
-        menuOptionsGeneral
+        menuOptionsGeneral,
+        menuShowReturns
     };
 
     void setupAudio();
@@ -167,6 +169,8 @@ private:
     void ensureDefaultTrack();
     void updateWindowTitle();
     void rebuildStrips();
+    void addReturnBus();
+    void setReturnsCollapsed (bool collapsed);
     void attachPlugin (const juce::PluginDescription& description, const juce::Uuid& trackId, bool master);
     /** Master chain when master is true; otherwise the track chain. Null if the track is gone. */
     PluginChain* pluginChainFor (const juce::Uuid& trackId, bool master);
@@ -211,10 +215,14 @@ private:
     HeaderBarButton engineButton { "engine" };
     HeaderBarButton panicButton { "panic" };
     HeaderBarButton addTrackButton { "addTrack" };
+    HeaderBarButton addReturnButton { "addReturn" };
 
     juce::Viewport trackViewport;
     juce::Component trackList;
     std::vector<std::unique_ptr<TrackStrip>> strips;
+    juce::Component returnList;
+    std::vector<std::unique_ptr<TrackStrip>> returnStrips;
+    std::unique_ptr<ReturnsBar> returnsBar;
     std::unique_ptr<MasterStrip> masterStrip;
     juce::OwnedArray<PluginEditorWindow> editorWindows;
     std::unique_ptr<PluginScanThread> scanThread;

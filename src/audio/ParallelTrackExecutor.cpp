@@ -152,7 +152,9 @@ void ParallelTrackExecutor::processSerial (Job* jobList,
                                            const float* const* inputs,
                                            int numInputChannelsIn,
                                            int numSamplesIn,
-                                           juce::AudioBuffer<float>& master) noexcept
+                                           juce::AudioBuffer<float>& master,
+                                           juce::AudioBuffer<float>* returnInputs,
+                                           int numReturns) noexcept
 {
     for (int i = 0; i < numJobs; ++i)
     {
@@ -161,6 +163,7 @@ void ParallelTrackExecutor::processSerial (Job* jobList,
             continue;
         job.track->processInputs (inputs, numInputChannelsIn, numSamplesIn, *job.midi);
         job.track->mixTo (master, numSamplesIn);
+        job.track->mixSendsTo (returnInputs, numReturns, numSamplesIn);
     }
 }
 
@@ -170,6 +173,8 @@ void ParallelTrackExecutor::processAndMix (Job* jobList,
                                            int numInputChannelsIn,
                                            int numSamplesIn,
                                            juce::AudioBuffer<float>& master,
+                                           juce::AudioBuffer<float>* returnInputs,
+                                           int numReturns,
                                            bool allowParallel) noexcept
 {
     if (jobList == nullptr || numJobs <= 0 || numSamplesIn <= 0)
@@ -178,7 +183,7 @@ void ParallelTrackExecutor::processAndMix (Job* jobList,
     // Parallel wake/join costs more than it saves for a single heavy track (common live case).
     if (! allowParallel || numJobs < 2 || ! started || workers.empty())
     {
-        processSerial (jobList, numJobs, inputs, numInputChannelsIn, numSamplesIn, master);
+        processSerial (jobList, numJobs, inputs, numInputChannelsIn, numSamplesIn, master, returnInputs, numReturns);
         return;
     }
 
@@ -217,6 +222,11 @@ void ParallelTrackExecutor::processAndMix (Job* jobList,
         doneEvent.wait (-1);
 
     for (int i = 0; i < numJobs; ++i)
+    {
         if (jobList[i].track != nullptr)
+        {
             jobList[i].track->mixTo (master, numSamplesIn);
+            jobList[i].track->mixSendsTo (returnInputs, numReturns, numSamplesIn);
+        }
+    }
 }

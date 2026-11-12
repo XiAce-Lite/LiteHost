@@ -14,6 +14,11 @@ int ProjectStore::countPlugins (const juce::XmlElement& root)
             if (track->getTagName() == "TRACK")
                 n += PluginChain::countXmlPlugins (*track);
 
+    if (auto* returns = root.getChildByName ("RETURNS"))
+        for (auto* bus = returns->getFirstChildElement(); bus != nullptr; bus = bus->getNextElement())
+            if (bus->getTagName() == "RETURN")
+                n += PluginChain::countXmlPlugins (*bus);
+
     return n;
 }
 
@@ -89,8 +94,33 @@ bool ProjectStore::loadIntoEngine (const juce::XmlElement& root,
             track->soloOverride = child->getBoolAttribute ("soloOverride", false)
                                || child->getBoolAttribute ("exclusiveSolo", false);
             track->plugins.setChainBypassed (child->getBoolAttribute ("pluginsBypassed", false));
+            for (int i = 0; i < TrackProcessor::maxSends; ++i)
+            {
+                track->sendLevel[i] = (float) child->getDoubleAttribute ("send" + juce::String (i), 0.0);
+                track->sendPreFader[i] = child->getBoolAttribute ("sendPre" + juce::String (i), false);
+            }
             restoreChain (track->plugins, *child);
             ++trackSerial;
+        }
+    }
+
+    if (auto* returns = root.getChildByName ("RETURNS"))
+    {
+        for (auto* child = returns->getFirstChildElement(); child != nullptr; child = child->getNextElement())
+        {
+            if (child->getTagName() != "RETURN")
+                continue;
+
+            auto* bus = engine.addReturn (child->getStringAttribute ("name", jp (u8"リターン")));
+            if (bus == nullptr)
+                break;
+
+            bus->trim = (float) child->getDoubleAttribute ("trim", 1.0);
+            bus->gain = (float) child->getDoubleAttribute ("gain", 1.0);
+            bus->pan = (float) child->getDoubleAttribute ("pan", 0.0);
+            bus->mute = child->getBoolAttribute ("mute", false);
+            bus->plugins.setChainBypassed (child->getBoolAttribute ("pluginsBypassed", false));
+            restoreChain (bus->plugins, *child);
         }
     }
 
@@ -130,7 +160,28 @@ bool ProjectStore::saveToFile (const juce::File& file, const AudioEngine& engine
         child->setAttribute ("solo", track->solo.load());
         child->setAttribute ("soloOverride", track->soloOverride.load());
         child->setAttribute ("pluginsBypassed", track->plugins.isChainBypassed() ? 1 : 0);
+        for (int i = 0; i < (int) engine.returns().size(); ++i)
+        {
+            child->setAttribute ("send" + juce::String (i), track->sendLevel[i].load());
+            child->setAttribute ("sendPre" + juce::String (i), track->sendPreFader[i].load() ? 1 : 0);
+        }
         track->plugins.writeXml (*child);
+    }
+
+    if (! engine.returns().empty())
+    {
+        auto* returns = xml.createNewChildElement ("RETURNS");
+        for (auto& bus : engine.returns())
+        {
+            auto* child = returns->createNewChildElement ("RETURN");
+            child->setAttribute ("name", bus->name);
+            child->setAttribute ("trim", bus->trim.load());
+            child->setAttribute ("gain", bus->gain.load());
+            child->setAttribute ("pan", bus->pan.load());
+            child->setAttribute ("mute", bus->mute.load());
+            child->setAttribute ("pluginsBypassed", bus->plugins.isChainBypassed() ? 1 : 0);
+            bus->plugins.writeXml (*child);
+        }
     }
 
     return xml.writeTo (file);

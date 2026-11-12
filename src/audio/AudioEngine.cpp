@@ -5,6 +5,8 @@
 AudioEngine::AudioEngine()
 {
     masterBus.setSize (2, maxBlockSize, false, true, true);
+    for (auto& buffer : returnInputs)
+        buffer.setSize (2, maxBlockSize, false, true, true);
     playHead.setPlaying (true);
     masterPlugins_.setPlayHead (&playHead);
     buildPanicMidi (panicMidi);
@@ -64,6 +66,8 @@ void AudioEngine::applyPanicIfNeeded (int numSamples) noexcept
 
     for (auto& track : tracks_)
         track->plugins.deliverMidiPanic (panicMidi, numSamples);
+    for (auto& bus : returns_)
+        bus->plugins.deliverMidiPanic (panicMidi, numSamples);
 
     masterPlugins_.deliverMidiPanic (panicMidi, numSamples);
 }
@@ -103,6 +107,8 @@ void AudioEngine::audioDeviceStopped()
 
     for (auto& track : tracks_)
         track->release();
+    for (auto& bus : returns_)
+        bus->release();
 
     masterPlugins_.release();
     reverb.reset();
@@ -125,6 +131,11 @@ void AudioEngine::prepareGraph()
         track->plugins.setPlayHead (&playHead);
         track->prepare (sampleRate, blockSize, &playHead);
     }
+    for (auto& bus : returns_)
+    {
+        bus->plugins.setPlayHead (&playHead);
+        bus->prepare (sampleRate, blockSize, &playHead);
+    }
 
     masterPlugins_.prepare (sampleRate, blockSize, &playHead);
     reverb.prepare (spec);
@@ -145,16 +156,62 @@ TrackProcessor* AudioEngine::addTrack (juce::String name)
     return raw;
 }
 
+TrackProcessor* AudioEngine::addReturn (juce::String name)
+{
+    if ((int) returns_.size() >= maxReturns)
+        return nullptr;
+
+    auto bus = std::make_unique<TrackProcessor> (std::move (name), true);
+    bus->inputStart = -1;
+    bus->plugins.setPlayHead (&playHead);
+    if (running)
+        bus->prepare (sampleRate, blockSize, &playHead);
+
+    auto* raw = bus.get();
+    returns_.push_back (std::move (bus));
+    return raw;
+}
+
 void AudioEngine::removeTrack (const juce::Uuid& id, DetachedObjects& detached)
 {
     auto it = std::find_if (tracks_.begin(), tracks_.end(),
                             [&id] (const auto& track) { return track->id == id; });
-    if (it == tracks_.end())
+    if (it != tracks_.end())
+    {
+        detached.add (std::move (*it));
+        tracks_.erase (it);
+        trackCount.store ((int) tracks_.size(), std::memory_order_relaxed);
+        return;
+    }
+
+    auto rit = std::find_if (returns_.begin(), returns_.end(),
+                             [&id] (const auto& bus) { return bus->id == id; });
+    if (rit == returns_.end())
         return;
 
-    detached.add (std::move (*it));
-    tracks_.erase (it);
-    trackCount.store ((int) tracks_.size(), std::memory_order_relaxed);
+    const int removed = (int) std::distance (returns_.begin(), rit);
+    detached.add (std::move (*rit));
+    returns_.erase (rit);
+
+    for (auto& track : tracks_)
+    {
+        for (int i = removed; i < maxReturns - 1; ++i)
+        {
+            track->sendLevel[i].store (track->sendLevel[i + 1].load (std::memory_order_relaxed), std::memory_order_relaxed);
+            track->sendPreFader[i].store (track->sendPreFader[i + 1].load (std::memory_order_relaxed), std::memory_order_relaxed);
+        }
+        track->sendLevel[maxReturns - 1].store (0.0f, std::memory_order_relaxed);
+        track->sendPreFader[maxReturns - 1].store (false, std::memory_order_relaxed);
+    }
+}
+
+int AudioEngine::indexOfReturn (const TrackProcessor& bus) const noexcept
+{
+    for (int i = 0; i < (int) returns_.size(); ++i)
+        if (returns_[(size_t) i].get() == &bus)
+            return i;
+
+    return -1;
 }
 
 bool AudioEngine::hasSoloOverride() const noexcept
@@ -200,6 +257,9 @@ void AudioEngine::clearTracksAndMaster (DetachedObjects& detached)
         detached.add (std::move (track));
     tracks_.clear();
     trackCount.store (0, std::memory_order_relaxed);
+    for (auto& bus : returns_)
+        detached.add (std::move (bus));
+    returns_.clear();
     masterPlugins_.clear (detached);
 
     reverbEnabled = false;
@@ -226,6 +286,10 @@ TrackProcessor* AudioEngine::findTrack (const juce::Uuid& id) const
     for (auto& track : tracks_)
         if (track->id == id)
             return track.get();
+
+    for (auto& bus : returns_)
+        if (bus->id == id)
+            return bus.get();
 
     return nullptr;
 }
@@ -358,7 +422,22 @@ void AudioEngine::processActiveTracks (const float* const* inputChannelData,
         }
     }
 
-    trackExecutor.processAndMix (jobs, numJobs, inputChannelData, numInputChannels, numSamples, masterBus, parallel);
+    trackExecutor.processAndMix (jobs, numJobs, inputChannelData, numInputChannels, numSamples, masterBus,
+                                 returnInputs, (int) returns_.size(), parallel);
+}
+
+void AudioEngine::processReturns (int numSamples) noexcept
+{
+    // Returns are solo-safe: only their own mute silences them.
+    for (size_t i = 0; i < returns_.size(); ++i)
+    {
+        auto& bus = *returns_[i];
+        if (bus.mute.load (std::memory_order_relaxed))
+            continue;
+
+        bus.processReturn (returnInputs[i], numSamples);
+        bus.mixTo (masterBus, numSamples);
+    }
 }
 
 void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputChannelData,
@@ -382,6 +461,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     masterBus.setSize (2, numSamples, false, false, true);
     masterBus.clear();
+    for (size_t i = 0; i < returns_.size(); ++i)
+    {
+        returnInputs[i].setSize (2, numSamples, false, false, true);
+        returnInputs[i].clear();
+    }
     updateBuiltInParameters();
     midiRouter.drain (numSamples, sampleRate);
     applyPanicIfNeeded (numSamples);
@@ -397,6 +481,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
     }
 
     processActiveTracks (inputChannelData, numInputChannels, numSamples, anySolo);
+    processReturns (numSamples);
 
     if (gateEnabled.load (std::memory_order_relaxed))
         gate.process (masterBus, numSamples, gateThresholdDb.load (std::memory_order_relaxed));

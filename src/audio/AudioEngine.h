@@ -15,6 +15,7 @@ class AudioEngine : public juce::AudioIODeviceCallback,
 {
 public:
     static constexpr int maxBlockSize = 8192;
+    static constexpr int maxReturns = TrackProcessor::maxSends;
     static constexpr const char* midiAllDevicesId = "*";
 
     AudioEngine();
@@ -48,16 +49,21 @@ public:
     }
 
     TrackProcessor* addTrack (juce::String name);
-    /** Caller holds the callback lock (see editGraph). */
+    /** Null when maxReturns already exist. Caller holds the callback lock. */
+    TrackProcessor* addReturn (juce::String name);
+    /** Removes a track or return bus. Removing a return shifts later sends down. Caller holds the callback lock. */
     void removeTrack (const juce::Uuid& id, DetachedObjects& detached);
     /** Move track at fromIndex to destIndex (after the source has been removed). Caller holds the callback lock. */
     bool moveTrack (int fromIndex, int destIndex);
-    /** Remove every track and master plugin and reset master settings. Caller holds the callback lock. */
+    /** Remove every track, return and master plugin and reset master settings. Caller holds the callback lock. */
     void clearTracksAndMaster (DetachedObjects& detached);
 
     /** Message thread. Sets the track's MIDI source ("" = none, "*" = all devices). */
     void setTrackMidiDevice (TrackProcessor& track, const juce::String& deviceId);
+    /** Searches tracks and return buses. */
     TrackProcessor* findTrack (const juce::Uuid& id) const;
+    const std::vector<std::unique_ptr<TrackProcessor>>& returns() const noexcept { return returns_; }
+    int indexOfReturn (const TrackProcessor& bus) const noexcept;
     bool hasSoloOverride() const noexcept;
     void setTrackSolo (TrackProcessor& track, bool shouldSolo);
     const std::vector<std::unique_ptr<TrackProcessor>>& tracks() const noexcept { return tracks_; }
@@ -107,7 +113,11 @@ private:
                               bool anySolo) noexcept;
 
     HostPlayHead playHead;
+    void processReturns (int numSamples) noexcept;
+
     std::vector<std::unique_ptr<TrackProcessor>> tracks_;
+    std::vector<std::unique_ptr<TrackProcessor>> returns_;
+    juce::AudioBuffer<float> returnInputs[maxReturns];
     PluginChain masterPlugins_;
     ParallelTrackExecutor trackExecutor;
     MidiInputRouter midiRouter;

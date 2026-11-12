@@ -25,14 +25,16 @@ public:
     void ensureStarted();
     void shutdown();
 
-    /** Process each job's processInputs, then mixTo master (serial). Audio-thread only.
-        When allowParallel is false (or too few jobs), runs entirely on the calling thread. */
+    /** Process each job's processInputs, then mixTo master and add sends to returnInputs (serial).
+        Audio-thread only. When allowParallel is false (or too few jobs), runs entirely on the calling thread. */
     void processAndMix (Job* jobs,
                         int numJobs,
                         const float* const* inputs,
                         int numInputChannels,
                         int numSamples,
                         juce::AudioBuffer<float>& master,
+                        juce::AudioBuffer<float>* returnInputs,
+                        int numReturns,
                         bool allowParallel) noexcept;
 
     int getWorkerCount() const noexcept { return (int) workers.size(); }
@@ -48,7 +50,9 @@ private:
                         const float* const* inputs,
                         int numInputChannels,
                         int numSamples,
-                        juce::AudioBuffer<float>& master) noexcept;
+                        juce::AudioBuffer<float>& master,
+                        juce::AudioBuffer<float>* returnInputs,
+                        int numReturns) noexcept;
 
     static constexpr std::uint32_t closedIndex = 0xffffffffu;
     static constexpr std::uint64_t packCursor (std::uint32_t gen, std::uint32_t index) noexcept

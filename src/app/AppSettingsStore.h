@@ -16,6 +16,7 @@ public:
     juce::String windowState;
     juce::String skippedReleaseTag;
     bool setupWizardCompleted = false;
+    bool returnsCollapsed = false;
 
     void load (AudioEngine& engine,
                ControlSurfaceManager& surface,

@@ -58,6 +58,7 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
     engineButton.setButtonText (jp (u8"オーディオ停止"));
     panicButton.setButtonText (jp (u8"パニック"));
     addTrackButton.setButtonText (jp (u8"トラック追加"));
+    addReturnButton.setButtonText (jp (u8"リターン追加"));
     setLookAndFeel (&lookAndFeel);
     juce::LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
     setOpaque (true);
@@ -93,20 +94,31 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
         controlSurface.refreshFeedback();
     };
 
+    addReturnButton.onClick = [this] { addReturnBus(); };
+
     engineButton.setExplicitFocusOrder (1);
     panicButton.setExplicitFocusOrder (2);
-    addTrackButton.setExplicitFocusOrder (3);
+    addReturnButton.setExplicitFocusOrder (3);
+    addTrackButton.setExplicitFocusOrder (4);
     panicButton.setTooltip (jp (u8"鳴り続けているノートを止めます（All Notes Off）"));
-    for (auto* b : { &engineButton, &panicButton, &addTrackButton })
+    addReturnButton.setTooltip (jp (u8"センド／リターン用のバスを追加（最大 ")
+                                + juce::String (AudioEngine::maxReturns) + jp (u8" 本）"));
+    for (auto* b : { &engineButton, &panicButton, &addReturnButton, &addTrackButton })
         b->onStateChange = [this] { repaint(); };
 
     addAndMakeVisible (engineButton);
     addAndMakeVisible (panicButton);
+    addAndMakeVisible (addReturnButton);
     addAndMakeVisible (addTrackButton);
 
     trackViewport.setViewedComponent (&trackList, false);
     trackViewport.setScrollBarsShown (false, true);
     addAndMakeVisible (trackViewport);
+
+    addChildComponent (returnList);
+    returnsBar = std::make_unique<ReturnsBar>();
+    returnsBar->onToggle = [this] { setReturnsCollapsed (! appSettings.returnsCollapsed); };
+    addChildComponent (*returnsBar);
 
     masterStrip = std::make_unique<MasterStrip> (*this);
     addAndMakeVisible (*masterStrip);
@@ -204,6 +216,7 @@ void MainComponent::paintOverChildren (juce::Graphics& g)
 {
     HeaderBarButton::paintChrome (g, engineButton);
     HeaderBarButton::paintChrome (g, panicButton);
+    HeaderBarButton::paintChrome (g, addReturnButton);
     HeaderBarButton::paintChrome (g, addTrackButton);
 }
 
@@ -216,6 +229,7 @@ void MainComponent::resized()
     auto header = r.removeFromTop (44);
     title.setBounds (header.removeFromLeft (110));
     addTrackButton.setBounds (header.removeFromRight (100).reduced (2, 6));
+    addReturnButton.setBounds (header.removeFromRight (104).reduced (2, 6));
     panicButton.setBounds (header.removeFromRight (88).reduced (2, 6));
     engineButton.setBounds (header.removeFromRight (100).reduced (2, 6));
     status.setBounds (header.reduced (4, 0));
@@ -226,9 +240,29 @@ void MainComponent::resized()
     auto master = r.removeFromBottom (210);
     masterStrip->setBounds (master);
     r.removeFromBottom (8);
-    trackViewport.setBounds (r);
 
     const int stripW = TrackStrip::stripWidth;
+    const bool hasReturns = ! returnStrips.empty();
+    const bool showReturns = hasReturns && ! appSettings.returnsCollapsed;
+    returnsBar->setVisible (hasReturns);
+    returnList.setVisible (showReturns);
+
+    if (showReturns)
+    {
+        returnList.setBounds (r.removeFromRight ((int) returnStrips.size() * stripW));
+        auto list = returnList.getLocalBounds();
+        for (auto& strip : returnStrips)
+            strip->setBounds (list.removeFromLeft (stripW));
+    }
+
+    if (hasReturns)
+    {
+        returnsBar->setBounds (r.removeFromRight (ReturnsBar::barWidth));
+        r.removeFromRight (2);
+    }
+
+    trackViewport.setBounds (r);
+
     const int contentW = juce::jmax (trackViewport.getMaximumVisibleWidth(),
                                      (int) strips.size() * stripW);
     trackList.setBounds (0, 0, contentW, trackViewport.getHeight());
@@ -288,6 +322,9 @@ juce::PopupMenu MainComponent::getMenuForIndex (int topLevelMenuIndex, const juc
         menu.addItem (menuSurfaceSettings, jp (u8"サーフェス..."));
         menu.addItem (menuMidiLearnSettings, jp (u8"MIDI学習..."));
         menu.addItem (menuVstScan, jp (u8"VST3 スキャン..."), ! scanInProgress);
+        menu.addSeparator();
+        menu.addItem (menuShowReturns, jp (u8"リターン欄を表示"),
+                      ! engine.returns().empty(), ! appSettings.returnsCollapsed);
         menu.addSeparator();
         menu.addItem (menuOptionsGeneral, jp (u8"一般..."));
         return menu;
@@ -366,6 +403,8 @@ void MainComponent::menuItemSelected (int menuItemID, int)
         showScanDialog();
     else if (menuItemID == menuOptionsGeneral)
         showOptionsGeneral();
+    else if (menuItemID == menuShowReturns)
+        setReturnsCollapsed (! appSettings.returnsCollapsed);
     else if (menuItemID == menuQuit)
     {
         if (auto* app = juce::JUCEApplicationBase::getInstance())
@@ -392,6 +431,13 @@ void MainComponent::timerCallback()
     // exchange: the audio thread also writes these, so a load/store pair could drop a peak.
     for (auto& strip : strips)
         strip->setPeak (strip->getTrack().peak.exchange (0.0f));
+
+    for (int i = 0; i < (int) returnStrips.size(); ++i)
+    {
+        const float peak = returnStrips[(size_t) i]->getTrack().peak.exchange (0.0f);
+        returnStrips[(size_t) i]->setPeak (peak);
+        returnsBar->setPeak (i, peak);
+    }
 
     if (masterStrip != nullptr)
         masterStrip->setPeak (engine.masterPeak.exchange (0.0f));
@@ -1032,10 +1078,11 @@ bool MainComponent::isPluginStillLoaded (juce::AudioPluginInstance* plugin) cons
         if (engine.masterPlugins().get (i) == plugin)
             return true;
 
-    for (auto& track : engine.tracks())
-        for (int i = 0; i < track->plugins.size(); ++i)
-            if (track->plugins.get (i) == plugin)
-                return true;
+    for (const auto* list : { &engine.tracks(), &engine.returns() })
+        for (auto& track : *list)
+            for (int i = 0; i < track->plugins.size(); ++i)
+                if (track->plugins.get (i) == plugin)
+                    return true;
 
     return false;
 }
@@ -1151,7 +1198,7 @@ void MainComponent::startUpdateCheck()
 
     const auto current = juce::JUCEApplicationBase::getInstance() != nullptr
                              ? juce::JUCEApplicationBase::getInstance()->getApplicationVersion()
-                             : juce::String ("0.2.6");
+                             : juce::String ("0.2.7");
 
     updateChecker->start (current, appSettings.skippedReleaseTag,
                           [safe = juce::Component::SafePointer<MainComponent> (this)] (UpdateChecker::Result result) {
@@ -1201,6 +1248,18 @@ void MainComponent::rebuildStrips()
         strips.push_back (std::move (strip));
     }
 
+    returnStrips.clear();
+    returnList.removeAllChildren();
+
+    for (auto& bus : engine.returns())
+    {
+        auto strip = std::make_unique<TrackStrip> (*this, *bus);
+        returnList.addAndMakeVisible (*strip);
+        returnStrips.push_back (std::move (strip));
+    }
+
+    returnsBar->setState ((int) returnStrips.size(), appSettings.returnsCollapsed);
+
     if (masterStrip != nullptr)
     {
         masterStrip->refreshPlugins();
@@ -1208,6 +1267,39 @@ void MainComponent::rebuildStrips()
     }
 
     controlSurface.refreshFeedback();
+    menuItemsChanged();
+    resized();
+}
+
+void MainComponent::addReturnBus()
+{
+    if ((int) engine.returns().size() >= AudioEngine::maxReturns)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon, "LiteHost",
+                                                jp (u8"リターンは最大 ") + juce::String (AudioEngine::maxReturns)
+                                                    + jp (u8" 本までです。"));
+        return;
+    }
+
+    {
+        const juce::ScopedLock sl (engine.getCallbackLock());
+        const auto letter = juce::String::charToString ((juce::juce_wchar) ('A' + (int) engine.returns().size()));
+        engine.addReturn (jp (u8"リターン ") + letter);
+    }
+
+    if (appSettings.returnsCollapsed)
+        setReturnsCollapsed (false);
+
+    rebuildStrips();
+    markProjectDirty();
+}
+
+void MainComponent::setReturnsCollapsed (bool collapsed)
+{
+    appSettings.returnsCollapsed = collapsed;
+    saveAppSettings();
+    returnsBar->setState ((int) returnStrips.size(), collapsed);
+    menuItemsChanged();
     resized();
 }
 
@@ -1270,6 +1362,8 @@ int MainComponent::indexOfTrack (const TrackProcessor& track) const
 void MainComponent::syncStripsFromEngine()
 {
     for (auto& strip : strips)
+        strip->syncFromTrack();
+    for (auto& strip : returnStrips)
         strip->syncFromTrack();
     if (masterStrip != nullptr)
         masterStrip->syncTogglesFromEngine();
