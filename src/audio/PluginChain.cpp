@@ -1,4 +1,5 @@
 #include "PluginChain.h"
+#include "DetachedObjects.h"
 #include "SyncRoomFinder.h"
 
 bool PluginChain::prepareInstance (juce::AudioPluginInstance& plugin,
@@ -57,6 +58,8 @@ void PluginChain::prepare (double newSampleRate, int samplesPerBlock, juce::Audi
     // Size for the device block (plus headroom). Avoid permanently allocating 128×8192
     // just to clear it every callback — that alone can push DSP load into the danger zone.
     scratch.setSize (maxScratchChannels, juce::jmax (samplesPerBlock, 2048), false, true, true);
+    // Room for a full panic burst (16 ch × 131 events) so copies never reallocate on the audio thread.
+    midi.ensureSize (32 * 1024);
 
     for (auto& slot : slots)
     {
@@ -150,15 +153,10 @@ void PluginChain::processSlot (Slot& slot, juce::AudioBuffer<float>& buffer, con
     const int pluginChans = juce::jmax (1, juce::jmax (slot.numIns, slot.numOuts));
 
     // Copy only when there are events (instruments consume; empty FX path stays cheap).
-    if (incomingMidi.isEmpty())
-    {
-        if (! midi.isEmpty())
-            midi.clear();
-    }
-    else
-    {
-        midi = incomingMidi;
-    }
+    // clear + addEvents reuses midi's storage; operator= would reallocate every block.
+    midi.clear();
+    if (! incomingMidi.isEmpty())
+        midi.addEvents (incomingMidi, 0, -1, 0);
 
     // Fast path for ordinary stereo inserts / stereo instruments.
     if (pluginChans <= hostChans)
@@ -249,14 +247,15 @@ void PluginChain::deliverMidiPanic (const juce::MidiBuffer& panicMidi, int numSa
         for (int ch = 0; ch < useChans; ++ch)
             scratch.clear (ch, 0, numSamples);
 
-        juce::MidiBuffer midiCopy (panicMidi);
+        midi.clear();
+        midi.addEvents (panicMidi, 0, -1, 0);
         juce::AudioBuffer<float> pluginBuffer (scratch.getArrayOfWritePointers(), useChans, numSamples);
 
         {
             const juce::ScopedLock pluginLock (plugin->getCallbackLock());
             // Bypass/suspend ignored: panic must reach stuck voices.
             if (! plugin->isSuspended())
-                plugin->processBlock (pluginBuffer, midiCopy);
+                plugin->processBlock (pluginBuffer, midi);
         }
 
         plugin->reset();
@@ -337,22 +336,16 @@ bool PluginChain::move (int fromIndex, int insertIndex)
     return insertPrepared (insertIndex, std::move (plugin), bypassed) != nullptr;
 }
 
-void PluginChain::remove (int index)
+void PluginChain::remove (int index, DetachedObjects& detached)
 {
-    if (! juce::isPositiveAndBelow (index, (int) slots.size()))
-        return;
-
-    if (auto* plugin = slots[(size_t) index].plugin.get())
-        plugin->releaseResources();
-
-    slots.erase (slots.begin() + index);
+    bool bypassed = false;
+    detached.add (take (index, bypassed));
 }
 
-void PluginChain::clear()
+void PluginChain::clear (DetachedObjects& detached)
 {
     for (auto& slot : slots)
-        if (slot.plugin != nullptr)
-            slot.plugin->releaseResources();
+        detached.add (std::move (slot.plugin));
 
     slots.clear();
 }

@@ -10,22 +10,34 @@ namespace
     constexpr const char* pluginDragPrefix = "litehost-plugin";
 }
 
-void LevelMeter::setLevel (float linear)
+namespace
 {
+    float meterNorm (float db) noexcept
+    {
+        return juce::jmap (juce::jlimit (-60.0f, 0.0f, db), -60.0f, 0.0f, 0.0f, 1.0f);
+    }
+
+    // Yellow from -12 dB so drum transients are easier to see.
+    int meterBand (float db) noexcept
+    {
+        return db > -1.0f ? 2 : (db > -12.0f ? 1 : 0);
+    }
+}
+
+void LevelMeter::update (float linear)
+{
+    constexpr float intervalMs = 1000.0f / (float) refreshHz;
+
     level = juce::jlimit (0.0f, 2.0f, linear);
     if (level > hold)
     {
         hold = level;
         holdMs = 600.0f;
     }
-    repaint();
-}
 
-void LevelMeter::tick (float deltaMs)
-{
     if (holdMs > 0.0f)
     {
-        holdMs -= deltaMs;
+        holdMs -= intervalMs;
         if (holdMs <= 0.0f)
             hold = level;
     }
@@ -33,6 +45,27 @@ void LevelMeter::tick (float deltaMs)
     {
         hold *= 0.92f;
     }
+
+    repaintIfChanged();
+}
+
+void LevelMeter::repaintIfChanged()
+{
+    const float db = juce::Decibels::gainToDecibels (juce::jmax (level, hold), -60.0f);
+    const int px = juce::roundToInt ((float) getHeight() * meterNorm (db));
+    const int band = meterBand (db);
+    if (px == paintedPx && band == paintedBand)
+        return;
+
+    paintedPx = px;
+    paintedBand = band;
+    repaint();
+}
+
+void LevelMeter::resized()
+{
+    paintedPx = -1;
+    repaintIfChanged();
 }
 
 void LevelMeter::paint (juce::Graphics& g)
@@ -43,14 +76,12 @@ void LevelMeter::paint (juce::Graphics& g)
 
     const float shown = juce::jmax (level, hold);
     const float db = juce::Decibels::gainToDecibels (shown, -60.0f);
-    const float norm = juce::jmap (juce::jlimit (-60.0f, 0.0f, db), -60.0f, 0.0f, 0.0f, 1.0f);
-    auto fill = r.removeFromBottom (r.getHeight() * norm);
+    auto fill = r.removeFromBottom (r.getHeight() * meterNorm (db));
 
-    // Yellow from -12 dB so drum transients are easier to see.
     auto colour = juce::Colour (0xff3dd68c);
-    if (db > -1.0f)
+    if (meterBand (db) == 2)
         colour = juce::Colour (LiteLookAndFeel::danger);
-    else if (db > -12.0f)
+    else if (meterBand (db) == 1)
         colour = juce::Colour (LiteLookAndFeel::solo);
 
     g.setColour (colour);

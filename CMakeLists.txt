@@ -62,6 +62,8 @@ target_sources(LiteHost PRIVATE
     src/app/OutOfProcessPluginScanner.cpp
     src/app/MidiDeviceAccess.h
     src/app/MidiDeviceAccess.cpp
+    src/app/JumpList.h
+    src/app/JumpList.cpp
     src/scanner/PluginScanIpc.h
     src/session/MixerSession.h
     src/session/MixerSession.cpp
@@ -72,6 +74,14 @@ target_sources(LiteHost PRIVATE
     src/audio/TrackProcessor.cpp
     src/audio/ParallelTrackExecutor.h
     src/audio/ParallelTrackExecutor.cpp
+    src/audio/DetachedObjects.h
+    src/audio/DetachedObjects.cpp
+    src/audio/MidiInputRouter.h
+    src/audio/MidiInputRouter.cpp
+    src/audio/NoiseGate.h
+    src/audio/NoiseGate.cpp
+    src/audio/PeakLimiter.h
+    src/audio/PeakLimiter.cpp
     src/audio/AudioEngine.h
     src/audio/AudioEngine.cpp
     src/audio/SyncRoomFinder.h

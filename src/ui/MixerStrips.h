@@ -28,6 +28,7 @@ public:
     void refreshPlugins();
     void setPeak (float value);
     juce::Uuid getTrackId() const;
+    TrackProcessor& getTrack() const noexcept { return track; }
     void syncFromTrack();
 
 private:

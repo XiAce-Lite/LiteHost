@@ -5,14 +5,22 @@
 class LevelMeter : public juce::Component
 {
 public:
-    void setLevel (float linear);
-    void tick (float deltaMs);
+    /** Rate at which the owner must call update(); hold / decay timing assumes it. */
+    static constexpr int refreshHz = 20;
+
+    /** New peak (linear) for the latest interval; advances peak-hold and repaints if the bar changed. */
+    void update (float linear);
     void paint (juce::Graphics& g) override;
+    void resized() override;
 
 private:
+    void repaintIfChanged();
+
     float level = 0.0f;
     float hold = 0.0f;
     float holdMs = 0.0f;
+    int paintedPx = -1;
+    int paintedBand = -1;
 };
 
 /** Compact power-style toggle for track-wide VST chain bypass. */

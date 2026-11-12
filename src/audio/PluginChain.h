@@ -3,6 +3,8 @@
 #include <JuceHeader.h>
 #include <vector>
 
+class DetachedObjects;
+
 class PluginChain
 {
 public:
@@ -43,8 +45,10 @@ public:
     /** Move slot from fromIndex to insertIndex (0 = before first, size = after last). */
     bool move (int fromIndex, int insertIndex);
 
-    void remove (int index);
-    void clear();
+    /** Detach slot index into `detached` (released and destroyed later, outside the audio lock). */
+    void remove (int index, DetachedObjects& detached);
+    /** Detach every slot into `detached`. */
+    void clear (DetachedObjects& detached);
     void setBypassed (int index, bool shouldBeBypassed);
     bool isBypassed (int index) const noexcept;
 

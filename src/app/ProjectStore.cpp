@@ -78,8 +78,8 @@ bool ProjectStore::loadIntoEngine (const juce::XmlElement& root,
             auto* track = engine.addTrack (child->getStringAttribute ("name", jp (u8"トラック")));
             track->inputStart = child->getIntAttribute ("inputStart", 0);
             track->inputCount = child->getIntAttribute ("inputCount", 2);
-            track->midiDeviceId = child->getStringAttribute ("midiInput");
-            if (track->midiDeviceId.isNotEmpty())
+            engine.setTrackMidiDevice (*track, child->getStringAttribute ("midiInput"));
+            if (track->getMidiDeviceId().isNotEmpty())
                 track->inputStart = -1;
             track->trim = (float) child->getDoubleAttribute ("trim", 1.0);
             track->gain = (float) child->getDoubleAttribute ("gain", 1.0);
@@ -121,8 +121,8 @@ bool ProjectStore::saveToFile (const juce::File& file, const AudioEngine& engine
         child->setAttribute ("name", track->name);
         child->setAttribute ("inputStart", track->inputStart.load());
         child->setAttribute ("inputCount", track->inputCount.load());
-        if (track->midiDeviceId.isNotEmpty())
-            child->setAttribute ("midiInput", track->midiDeviceId);
+        if (track->getMidiDeviceId().isNotEmpty())
+            child->setAttribute ("midiInput", track->getMidiDeviceId());
         child->setAttribute ("trim", track->trim.load());
         child->setAttribute ("gain", track->gain.load());
         child->setAttribute ("pan", track->pan.load());

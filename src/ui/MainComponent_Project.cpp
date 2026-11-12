@@ -104,10 +104,7 @@ void MainComponent::clearProjectState()
     strips.clear();
     trackList.removeAllChildren();
 
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        engine.clearTracksAndMaster();
-    }
+    engine.editGraph ([this] (DetachedObjects& detached) { engine.clearTracksAndMaster (detached); });
 
     if (masterStrip != nullptr)
         masterStrip->refreshPlugins();
@@ -213,9 +210,8 @@ void MainComponent::openProject()
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
                           [this, chooser] (const juce::FileChooser& fc) {
                               auto file = fc.getResult();
-                              if (file.existsAsFile() && ! loadProjectFile (file))
-                                  juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
-                                                                          jp (u8"プロジェクトを開けませんでした。"));
+                              if (file.existsAsFile())
+                                  openProjectOrWarn (file);
                           });
 }
 
@@ -265,9 +261,33 @@ void MainComponent::openRecentProject (int index)
     if (! juce::isPositiveAndBelow (index, appSettings.recentProjects.size()))
         return;
 
-    const auto file = appSettings.recentProjects.getReference (index);
+    // Copy: loading reorders recentProjects.
+    const auto file = appSettings.recentProjects[index];
+    openProjectOrWarn (file);
+}
+
+void MainComponent::openProjectOrWarn (const juce::File& file)
+{
     if (! loadProjectFile (file))
         juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
                                                 jp (u8"プロジェクトを開けませんでした。"));
+}
+
+void MainComponent::openProjectFromOutside (const juce::File& file)
+{
+    if (! file.existsAsFile())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon, "LiteHost",
+                                                jp (u8"プロジェクトが見つかりません: ") + file.getFullPathName());
+        return;
+    }
+
+    if (file == appSettings.currentProject && ! projectDirty)
+        return;
+
+    promptIfProjectDirty ([safe = juce::Component::SafePointer<MainComponent> (this), file] {
+        if (safe != nullptr)
+            safe->openProjectOrWarn (file);
+    });
 }
 

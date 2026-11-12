@@ -10,6 +10,7 @@ class AppSettingsStore
 {
 public:
     juce::File currentProject;
+    /** Modify only via rememberProject / clearRecent so the taskbar Jump List stays in sync. */
     juce::Array<juce::File> recentProjects;
     juce::StringArray extraVstPaths;
     juce::String windowState;
@@ -25,4 +26,10 @@ public:
 
     void rememberProject (const juce::File& file);
     void clearRecent();
+
+private:
+    void loadFromFile (AudioEngine& engine,
+                       ControlSurfaceManager& surface,
+                       MidiLearnManager& learn);
+    void recentProjectsChanged() const;
 };

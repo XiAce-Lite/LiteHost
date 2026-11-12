@@ -153,7 +153,7 @@ MainComponent::MainComponent (juce::String projectPathToOpen, StartupProgress* p
     CrashLog::write ("project opened=" + juce::String ((int) opened));
     rebuildStrips();
     updateWindowTitle();
-    startTimerHz (20);
+    startTimerHz (LevelMeter::refreshHz);
     CrashLog::write ("MainComponent ctor done");
     reportStartup (jp (u8"準備完了"), 1.0);
     startupProgress = nullptr;
@@ -389,27 +389,21 @@ void MainComponent::changeListenerCallback (juce::ChangeBroadcaster*)
 
 void MainComponent::timerCallback()
 {
+    // exchange: the audio thread also writes these, so a load/store pair could drop a peak.
     for (auto& strip : strips)
-        if (auto* track = engine.findTrack (strip->getTrackId()))
-        {
-            strip->setPeak (track->peak.load());
-            track->peak.store (track->peak.load() * 0.72f);
-        }
+        strip->setPeak (strip->getTrack().peak.exchange (0.0f));
 
     if (masterStrip != nullptr)
-    {
-        masterStrip->setPeak (engine.masterPeak.load());
-        engine.masterPeak.store (engine.masterPeak.load() * 0.72f);
-    }
+        masterStrip->setPeak (engine.masterPeak.exchange (0.0f));
 
     // Status (~4 Hz) — CPU peak meter is slow-decay; no need to rewrite the label 20×/s.
     static int statusDiv = 0;
-    if ((++statusDiv % 5) == 0 && scanStatus.isEmpty())
+    if ((++statusDiv % (LevelMeter::refreshHz / 4)) == 0 && scanStatus.isEmpty())
         status.setText (makeStatusText(), juce::dontSendNotification);
 
-    // Occasional LED / fader mirror to the surface.
+    // Occasional LED / fader mirror to the surface (~2 Hz).
     static int feedbackDiv = 0;
-    if ((++feedbackDiv % 10) == 0)
+    if ((++feedbackDiv % (LevelMeter::refreshHz / 2)) == 0)
         controlSurface.refreshFeedback();
 }
 
@@ -523,10 +517,10 @@ void MainComponent::syncTrackMidiInputs()
 
     for (auto& track : engine.tracks())
     {
-        if (track->midiDeviceId.isEmpty())
+        if (track->getMidiDeviceId().isEmpty())
             continue;
 
-        if (track->midiDeviceId == AudioEngine::midiAllDevicesId)
+        if (track->getMidiDeviceId() == AudioEngine::midiAllDevicesId)
         {
             for (const auto& device : juce::MidiInput::getAvailableDevices())
                 if (! MidiDeviceAccess::enableInput (deviceManager, device.identifier))
@@ -534,8 +528,8 @@ void MainComponent::syncTrackMidiInputs()
         }
         else
         {
-            if (! MidiDeviceAccess::enableInput (deviceManager, track->midiDeviceId))
-                failed.addIfNotAlreadyThere (track->midiDeviceId);
+            if (! MidiDeviceAccess::enableInput (deviceManager, track->getMidiDeviceId()))
+                failed.addIfNotAlreadyThere (track->getMidiDeviceId());
         }
     }
 
@@ -607,7 +601,7 @@ bool MainComponent::maybeAutoCreateStarterMonoTrack()
         {
             track->inputStart = firstMono;
             track->inputCount = 1;
-            track->midiDeviceId.clear();
+            engine.setTrackMidiDevice (*track, {});
         }
     }
 

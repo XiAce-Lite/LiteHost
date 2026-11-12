@@ -1,5 +1,25 @@
 #include "ParallelTrackExecutor.h"
 
+#if JUCE_INTEL
+ #include <immintrin.h>
+#endif
+
+namespace
+{
+    inline void cpuRelax() noexcept
+    {
+       #if JUCE_INTEL
+        _mm_pause();
+       #elif JUCE_ARM && ! JUCE_MSVC
+        __asm__ __volatile__ ("yield");
+       #endif
+    }
+
+    // Helpers usually finish within tens of µs of each other; spinning that long
+    // avoids a kernel wait/wake round-trip (and scheduler jitter) on the audio thread.
+    constexpr double joinSpinSeconds = 0.0001;
+}
+
 class ParallelTrackExecutor::Worker final : public juce::Thread
 {
 public:
@@ -95,22 +115,32 @@ void ParallelTrackExecutor::workerLoop() noexcept
 
 void ParallelTrackExecutor::runJobsOnThisThread() noexcept
 {
-    std::atomic_thread_fence (std::memory_order_acquire);
-
-    const int total = activeJobCount;
-    auto* jobList = activeJobs;
-    if (total <= 0 || jobList == nullptr)
-        return;
-
     for (;;)
     {
-        const int index = nextJob.fetch_add (1, std::memory_order_relaxed);
-        if (index >= total)
-            break;
+        auto expected = cursor.load (std::memory_order_acquire);
+        const auto index = cursorIndex (expected);
+        if (index == closedIndex)
+            return;
 
+        auto* jobList = batchJobs.load (std::memory_order_relaxed);
+        const int total = batchCount.load (std::memory_order_relaxed);
+        const auto* const* inputs = batchInputs.load (std::memory_order_relaxed);
+        const int numInputs = batchNumInputs.load (std::memory_order_relaxed);
+        const int samples = batchNumSamples.load (std::memory_order_relaxed);
+        if (jobList == nullptr || (int) index >= total)
+            return;
+
+        // Pairs with the release fence in processAndMix: if any batch field above came from a newer
+        // batch, the cursor has already been closed and the claim below fails.
+        std::atomic_thread_fence (std::memory_order_acquire);
+        if (! cursor.compare_exchange_weak (expected, expected + 1,
+                                            std::memory_order_acq_rel, std::memory_order_relaxed))
+            continue;
+
+        // Claimed: this batch cannot finish (and its stack-owned job array cannot go away) until we report.
         auto& job = jobList[index];
         if (job.track != nullptr && job.midi != nullptr)
-            job.track->processInputs (inputChannels, numInputChannels, numSamples, *job.midi);
+            job.track->processInputs (inputs, numInputs, samples, *job.midi);
 
         if (completed.fetch_add (1, std::memory_order_acq_rel) + 1 >= total)
             doneEvent.signal();
@@ -152,15 +182,20 @@ void ParallelTrackExecutor::processAndMix (Job* jobList,
         return;
     }
 
-    activeJobs = jobList;
-    activeJobCount = numJobs;
-    inputChannels = inputs;
-    numInputChannels = numInputChannelsIn;
-    numSamples = numSamplesIn;
-    nextJob.store (0, std::memory_order_relaxed);
+    // Close the previous batch before touching its fields, so a helper that wakes late
+    // (kicked for an earlier block) cannot claim work with half-updated parameters.
+    ++generation;
+    cursor.store (packCursor (generation, closedIndex), std::memory_order_relaxed);
+    std::atomic_thread_fence (std::memory_order_release);
+
+    batchJobs.store (jobList, std::memory_order_relaxed);
+    batchCount.store (numJobs, std::memory_order_relaxed);
+    batchInputs.store (inputs, std::memory_order_relaxed);
+    batchNumInputs.store (numInputChannelsIn, std::memory_order_relaxed);
+    batchNumSamples.store (numSamplesIn, std::memory_order_relaxed);
     completed.store (0, std::memory_order_relaxed);
     doneEvent.reset();
-    std::atomic_thread_fence (std::memory_order_release);
+    cursor.store (packCursor (generation, 0), std::memory_order_release);
 
     // Wake only as many helpers as can usefully steal work (not the whole pool).
     const int helpersToKick = juce::jmin ((int) workers.size(), numJobs - 1);
@@ -168,6 +203,15 @@ void ParallelTrackExecutor::processAndMix (Job* jobList,
         workers[(size_t) i]->kick();
 
     runJobsOnThisThread();
+
+    if (completed.load (std::memory_order_acquire) < numJobs)
+    {
+        const auto spinUntil = juce::Time::getHighResolutionTicks()
+                             + juce::Time::secondsToHighResolutionTicks (joinSpinSeconds);
+        while (completed.load (std::memory_order_acquire) < numJobs
+               && juce::Time::getHighResolutionTicks() < spinUntil)
+            cpuRelax();
+    }
 
     while (completed.load (std::memory_order_acquire) < numJobs)
         doneEvent.wait (-1);

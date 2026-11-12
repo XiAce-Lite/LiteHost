@@ -24,10 +24,11 @@ void TrackProcessor::processInputs (const float* const* inputs,
                                     int numSamples,
                                     const juce::MidiBuffer& midi) noexcept
 {
+    const auto startTicks = juce::Time::getHighResolutionTicks();
     work.setSize (2, numSamples, false, false, true);
     work.clear();
 
-    const bool useMidi = midiDeviceId.isNotEmpty();
+    const bool useMidi = getMidiRoute() != MidiInputRouter::routeNone;
     const int start = inputStart.load (std::memory_order_relaxed);
     const int count = inputCount.load (std::memory_order_relaxed);
 
@@ -66,6 +67,8 @@ void TrackProcessor::processInputs (const float* const* inputs,
     const float magnitude = work.getMagnitude (0, numSamples);
     const float previous = peak.load (std::memory_order_relaxed);
     peak.store (juce::jmax (previous * 0.6f, magnitude), std::memory_order_relaxed);
+
+    lastProcessTicks.store (juce::Time::getHighResolutionTicks() - startTicks, std::memory_order_relaxed);
 }
 
 void TrackProcessor::mixTo (juce::AudioBuffer<float>& master, int numSamples) const noexcept

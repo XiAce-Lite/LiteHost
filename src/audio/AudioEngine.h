@@ -1,7 +1,11 @@
 #pragma once
 
+#include "DetachedObjects.h"
 #include "HostPlayHead.h"
+#include "MidiInputRouter.h"
+#include "NoiseGate.h"
 #include "ParallelTrackExecutor.h"
+#include "PeakLimiter.h"
 #include "TrackProcessor.h"
 #include <atomic>
 #include <vector>
@@ -29,11 +33,30 @@ public:
     /** Queue All Notes Off / All Sound Off for the next audio callback (all tracks + master). */
     void requestPanic() noexcept;
 
+    /** Run `edit (DetachedObjects&)` under the callback lock. Tracks / plugins it detaches are
+        destroyed when the returned object dies — always after the lock is released. Keep the
+        return value alive when UI still references the detached objects (e.g. until strips rebuild). */
+    template <typename Edit>
+    DetachedObjects editGraph (Edit&& edit)
+    {
+        DetachedObjects detached;
+        {
+            const juce::ScopedLock sl (callbackLock);
+            edit (detached);
+        }
+        return detached;
+    }
+
     TrackProcessor* addTrack (juce::String name);
-    void removeTrack (const juce::Uuid& id);
+    /** Caller holds the callback lock (see editGraph). */
+    void removeTrack (const juce::Uuid& id, DetachedObjects& detached);
     /** Move track at fromIndex to destIndex (after the source has been removed). Caller holds the callback lock. */
     bool moveTrack (int fromIndex, int destIndex);
-    void clearTracksAndMaster();
+    /** Remove every track and master plugin and reset master settings. Caller holds the callback lock. */
+    void clearTracksAndMaster (DetachedObjects& detached);
+
+    /** Message thread. Sets the track's MIDI source ("" = none, "*" = all devices). */
+    void setTrackMidiDevice (TrackProcessor& track, const juce::String& deviceId);
     TrackProcessor* findTrack (const juce::Uuid& id) const;
     bool hasSoloOverride() const noexcept;
     void setTrackSolo (TrackProcessor& track, bool shouldSolo);
@@ -72,21 +95,10 @@ public:
     int getTrackCount() const noexcept { return trackCount.load (std::memory_order_relaxed); }
 
 private:
-    struct PendingMidi
-    {
-        juce::String deviceId;
-        juce::MidiMessage message;
-    };
-
     void prepareGraph();
     void updateBuiltInParameters() noexcept;
-    void applyPeakLimiter (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
-    void resetPeakLimiter() noexcept;
-    void applyGate (juce::AudioBuffer<float>& buffer, int numSamples) noexcept;
     void copyToOutputs (float* const* outputs, int numOutputChannels, int numSamples) noexcept;
     void applyOutputFadeIn (int numSamples) noexcept;
-    void drainPendingMidi (int numSamples) noexcept;
-    const juce::MidiBuffer* findDeviceMidi (const juce::String& deviceId) const noexcept;
     void applyPanicIfNeeded (int numSamples) noexcept;
     static void buildPanicMidi (juce::MidiBuffer& dest);
     void processActiveTracks (const float* const* inputChannelData,
@@ -98,20 +110,14 @@ private:
     std::vector<std::unique_ptr<TrackProcessor>> tracks_;
     PluginChain masterPlugins_;
     ParallelTrackExecutor trackExecutor;
+    MidiInputRouter midiRouter;
+    NoiseGate gate;
+    PeakLimiter limiter;
     juce::AudioBuffer<float> masterBus;
-    juce::AudioBuffer<float> limiterDelay;
-    juce::HeapBlock<float> limiterPeakRing;
     juce::dsp::Reverb reverb;
     juce::dsp::ProcessSpec spec {};
     juce::CriticalSection callbackLock;
-    juce::CriticalSection midiLock;
-    juce::Array<PendingMidi> pendingMidi;
-    juce::Array<PendingMidi> midiDrainBatch;
-    juce::MidiBuffer midiAllScratch;
-    static constexpr int maxMidiDeviceBuckets = 16;
-    juce::String midiDeviceBucketIds[maxMidiDeviceBuckets];
-    juce::MidiBuffer midiDeviceBuckets[maxMidiDeviceBuckets];
-    int numMidiDeviceBuckets = 0;
+    juce::MidiBuffer panicMidi;
     std::atomic<float> cpuLoad { 0.0f };
     std::atomic<float> cpuPeakLoad { 0.0f };
     std::atomic<int> trackCount { 0 };
@@ -124,14 +130,5 @@ private:
     int blockSize = 512;
     bool running = false;
     int outputFadeSamplesRemaining = 0;
-    float gateEnv = 0.0f;
-    float gateGain = 1.0f;
-    bool gateOpen = true;
-    int limiterLookAhead = 0;
-    int limiterWrite = 0;
-    float limiterGain = 1.0f;
-    float limiterAttack = 1.0f;
-    float limiterRelease = 1.0f;
-    float limiterWindowPeak = 0.0f;
-    static constexpr int maxParallelTrackJobs = 64;
+    static constexpr int maxParallelTrackJobs = 256;
 };

@@ -2,6 +2,7 @@
 
 #include "TrackProcessor.h"
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -49,15 +50,25 @@ private:
                         int numSamples,
                         juce::AudioBuffer<float>& master) noexcept;
 
+    static constexpr std::uint32_t closedIndex = 0xffffffffu;
+    static constexpr std::uint64_t packCursor (std::uint32_t gen, std::uint32_t index) noexcept
+    {
+        return ((std::uint64_t) gen << 32) | index;
+    }
+    static constexpr std::uint32_t cursorIndex (std::uint64_t packed) noexcept { return (std::uint32_t) packed; }
+
     std::vector<std::unique_ptr<Worker>> workers;
 
-    Job* activeJobs = nullptr;
-    int activeJobCount = 0;
-    const float* const* inputChannels = nullptr;
-    int numInputChannels = 0;
-    int numSamples = 0;
+    /** (generation << 32) | next job index. A claim is a CAS on this, so it fails once the batch changes. */
+    std::atomic<std::uint64_t> cursor { packCursor (0, closedIndex) };
+    std::uint32_t generation = 0; // audio thread only
 
-    std::atomic<int> nextJob { 0 };
+    std::atomic<Job*> batchJobs { nullptr };
+    std::atomic<int> batchCount { 0 };
+    std::atomic<const float* const*> batchInputs { nullptr };
+    std::atomic<int> batchNumInputs { 0 };
+    std::atomic<int> batchNumSamples { 0 };
+
     std::atomic<int> completed { 0 };
     std::atomic<bool> exitFlag { false };
 

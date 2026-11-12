@@ -5,14 +5,13 @@
 
 void MainComponent::removePluginFromChain (const juce::Uuid& trackId, bool master, int index)
 {
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        if (auto* chain = pluginChainFor (trackId, master))
-        {
-            closeEditorsFor (chain->get (index));
-            chain->remove (index);
-        }
-    }
+    auto* chain = pluginChainFor (trackId, master);
+    if (chain == nullptr)
+        return;
+
+    closeEditorsFor (chain->get (index));
+    engine.editGraph ([chain, index] (DetachedObjects& detached) { chain->remove (index, detached); });
+
     rebuildStrips();
     markProjectDirty();
 }
@@ -33,11 +32,10 @@ void MainComponent::removeTrack (const juce::Uuid& id)
         for (int i = 0; i < track->plugins.size(); ++i)
             closeEditorsFor (track->plugins.get (i));
 
-    {
-        const juce::ScopedLock sl (engine.getCallbackLock());
-        engine.removeTrack (id);
-    }
+    // Strips hold TrackProcessor references: keep the track alive until they are rebuilt.
+    auto detached = engine.editGraph ([this, &id] (DetachedObjects& d) { engine.removeTrack (id, d); });
     rebuildStrips();
+    detached.destroyAll();
     markProjectDirty();
 }
 
@@ -122,7 +120,7 @@ void MainComponent::copyPlugin (const juce::Uuid& fromTrackId, int pluginIndex,
     PluginChain::PluginLoadRequest request;
 
     {
-        const juce::ScopedLock sl (engine.getCallbackLock());
+        // Chains only change on this thread, so reading them needs no audio lock.
         auto* from = engine.findTrack (fromTrackId);
         auto* to = engine.findTrack (toTrackId);
         if (from == nullptr || to == nullptr)

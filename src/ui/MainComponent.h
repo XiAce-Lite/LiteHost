@@ -111,6 +111,8 @@ public:
     void clearProjectDirty();
     /** If dirty, ask Save / Discard / Cancel. Calls proceed only for Save(success) or Discard. */
     void promptIfProjectDirty (std::function<void()> proceed);
+    /** Open a project handed over by another launch (Jump List, Explorer). Prompts if dirty. */
+    void openProjectFromOutside (const juce::File& file);
 
 private:
     enum MenuIds
@@ -160,6 +162,7 @@ private:
     void saveProjectAs();
     void saveProjectAsThen (std::function<void()> afterSave);
     void openRecentProject (int index);
+    void openProjectOrWarn (const juce::File& file);
     void clearProjectState();
     void ensureDefaultTrack();
     void updateWindowTitle();

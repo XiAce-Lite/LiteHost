@@ -1,5 +1,6 @@
 #include "AppSettingsStore.h"
 #include "AppPaths.h"
+#include "JumpList.h"
 #include "audio/AudioEngine.h"
 #include "control/ControlSurface.h"
 #include "control/MidiLearn.h"
@@ -7,6 +8,14 @@
 void AppSettingsStore::load (AudioEngine& engine,
                              ControlSurfaceManager& surface,
                              MidiLearnManager& learn)
+{
+    loadFromFile (engine, surface, learn);
+    recentProjectsChanged();
+}
+
+void AppSettingsStore::loadFromFile (AudioEngine& engine,
+                                     ControlSurfaceManager& surface,
+                                     MidiLearnManager& learn)
 {
     recentProjects.clear();
     extraVstPaths.clear();
@@ -87,9 +96,17 @@ void AppSettingsStore::rememberProject (const juce::File& file)
 
     while (recentProjects.size() > 10)
         recentProjects.removeLast();
+
+    recentProjectsChanged();
 }
 
 void AppSettingsStore::clearRecent()
 {
     recentProjects.clear();
+    recentProjectsChanged();
+}
+
+void AppSettingsStore::recentProjectsChanged() const
+{
+    JumpList::setRecentProjects (recentProjects);
 }

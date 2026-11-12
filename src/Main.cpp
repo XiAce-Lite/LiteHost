@@ -25,36 +25,11 @@ public:
         juce::Process::setPriority (juce::Process::NormalPriority);
         juce::FloatVectorOperations::disableDenormalisedNumberSupport();
 
-        juce::String projectPath;
-        bool testSyncRoom = false;
-
-        if (commandLine.isNotEmpty())
-        {
-            juce::ArgumentList args ("LiteHost", commandLine);
-            for (const auto& arg : args.arguments)
-            {
-                const auto token = arg.text.unquoted();
-                if (token.equalsIgnoreCase ("--test-syncroom"))
-                {
-                    testSyncRoom = true;
-                    continue;
-                }
-
-                if (token.endsWithIgnoreCase (".litehost") || token.endsWithIgnoreCase (".xml"))
-                {
-                    projectPath = token;
-                    continue;
-                }
-
-                const juce::File asFile (token);
-                if (asFile.existsAsFile())
-                    projectPath = asFile.getFullPathName();
-            }
-        }
+        const auto args = parseCommandLine (commandLine);
 
         splash = std::make_unique<StartupSplashWindow>();
         splash->setStatus (jp (u8"起動しています..."), 0.04);
-        mainWindow = std::make_unique<MainWindow> (getApplicationName(), projectPath, testSyncRoom, splash.get());
+        mainWindow = std::make_unique<MainWindow> (getApplicationName(), args.projectPath, args.testSyncRoom, splash.get());
         splash.reset();
     }
 
@@ -83,7 +58,19 @@ public:
 
     void anotherInstanceStarted (const juce::String& commandLine) override
     {
-        juce::ignoreUnused (commandLine);
+        if (mainWindow == nullptr)
+            return;
+
+        if (mainWindow->isMinimised())
+            mainWindow->setMinimised (false);
+        mainWindow->toFront (true);
+
+        const auto args = parseCommandLine (commandLine);
+        if (args.projectPath.isEmpty())
+            return;
+
+        if (auto* content = dynamic_cast<MainComponent*> (mainWindow->getContentComponent()))
+            content->openProjectFromOutside (juce::File (args.projectPath));
     }
 
     class MainWindow : public juce::DocumentWindow
@@ -116,6 +103,41 @@ public:
     };
 
 private:
+    struct LaunchArgs
+    {
+        juce::String projectPath;
+        bool testSyncRoom = false;
+    };
+
+    static LaunchArgs parseCommandLine (const juce::String& commandLine)
+    {
+        LaunchArgs result;
+        if (commandLine.isEmpty())
+            return result;
+
+        juce::ArgumentList args ("LiteHost", commandLine);
+        for (const auto& arg : args.arguments)
+        {
+            const auto token = arg.text.unquoted();
+            if (token.equalsIgnoreCase ("--test-syncroom"))
+            {
+                result.testSyncRoom = true;
+                continue;
+            }
+
+            if (token.endsWithIgnoreCase (".litehost") || token.endsWithIgnoreCase (".xml"))
+            {
+                result.projectPath = token;
+                continue;
+            }
+
+            const juce::File asFile (token);
+            if (asFile.existsAsFile())
+                result.projectPath = asFile.getFullPathName();
+        }
+        return result;
+    }
+
     std::unique_ptr<StartupSplashWindow> splash;
     std::unique_ptr<MainWindow> mainWindow;
 };

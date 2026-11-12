@@ -182,8 +182,8 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
                 const juce::ScopedLock sl (owner.getEngine().getCallbackLock());
                 track.inputStart = -1;
                 track.inputCount = 2;
-                track.midiDeviceId = midiId;
             }
+            owner.getEngine().setTrackMidiDevice (track, midiId);
             owner.syncTrackMidiInputs();
             owner.markProjectDirty();
             return;
@@ -195,8 +195,8 @@ TrackStrip::TrackStrip (MixerStripHost& ownerIn, TrackProcessor& trackIn)
             const juce::ScopedLock sl (owner.getEngine().getCallbackLock());
             track.inputStart = start;
             track.inputCount = count;
-            track.midiDeviceId.clear();
         }
+        owner.getEngine().setTrackMidiDevice (track, {});
         owner.markProjectDirty();
     };
     addAndMakeVisible (input);
@@ -549,16 +549,16 @@ void TrackStrip::refreshInputs()
     for (int i = 0; i < midiDevices.size(); ++i)
         input.addItem ("MIDI: " + midiDevices[i].name, midiComboId (i));
 
-    if (track.midiDeviceId == AudioEngine::midiAllDevicesId)
+    if (track.getMidiDeviceId() == AudioEngine::midiAllDevicesId)
     {
         input.setSelectedId (midiAllComboId, juce::dontSendNotification);
     }
-    else if (track.midiDeviceId.isNotEmpty())
+    else if (track.getMidiDeviceId().isNotEmpty())
     {
         bool found = false;
         for (int i = 0; i < midiDevices.size(); ++i)
         {
-            if (midiDevices[i].identifier == track.midiDeviceId)
+            if (midiDevices[i].identifier == track.getMidiDeviceId())
             {
                 input.setSelectedId (midiComboId (i), juce::dontSendNotification);
                 found = true;
@@ -568,7 +568,7 @@ void TrackStrip::refreshInputs()
 
         if (! found)
         {
-            input.addItem ("MIDI: (" + track.midiDeviceId + ")", midiMissingComboId);
+            input.addItem ("MIDI: (" + track.getMidiDeviceId() + ")", midiMissingComboId);
             input.setSelectedId (midiMissingComboId, juce::dontSendNotification);
         }
     }
@@ -598,8 +598,7 @@ void TrackStrip::refreshPlugins()
 
 void TrackStrip::setPeak (float value)
 {
-    meter.setLevel (value);
-    meter.tick (50.0f);
+    meter.update (value);
 }
 
 juce::Uuid TrackStrip::getTrackId() const
@@ -891,8 +890,7 @@ void MasterStrip::syncTogglesFromEngine()
 
 void MasterStrip::setPeak (float value)
 {
-    meter.setLevel (value);
-    meter.tick (50.0f);
+    meter.update (value);
 }
 
 void MasterStrip::LearnClickListener::mouseDown (const juce::MouseEvent& e)
