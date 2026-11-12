@@ -22,6 +22,23 @@ FetchContent_Declare(JUCE
 )
 FetchContent_MakeAvailable(JUCE)
 
+# JUCE regenerates <target>_resources.rc only when the icon changes, so the Windows
+# file version would otherwise stay at the VERSION of the first configure.
+# Info.txt is rewritten on every configure; the COPYONLY copy only changes with its contents.
+function(litehost_refresh_resources_rc target)
+    if(NOT WIN32)
+        return()
+    endif()
+
+    get_target_property(code_dir ${target} JUCE_GENERATED_SOURCES_DIRECTORY)
+    get_target_property(info_file ${target} JUCE_INFO_FILE)
+    set(info_stamp "${code_dir}/InfoForRc.txt")
+    configure_file("${info_file}" "${info_stamp}" COPYONLY)
+    add_custom_command(OUTPUT "${code_dir}/${target}_resources.rc"
+        DEPENDS "${info_stamp}"
+        APPEND)
+endfunction()
+
 juce_add_gui_app(LiteHost
     PRODUCT_NAME "LiteHost"
     VERSION "0.2.7"
@@ -34,6 +51,7 @@ juce_add_gui_app(LiteHost
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE
 )
+litehost_refresh_resources_rc(LiteHost)
 
 juce_add_binary_data(LiteHostAssets
     HEADER_NAME BinaryData.h
@@ -174,6 +192,7 @@ juce_add_console_app(LiteHostScanner
     NEEDS_WEB_BROWSER FALSE
     NEEDS_CURL FALSE
 )
+litehost_refresh_resources_rc(LiteHostScanner)
 
 juce_generate_juce_header(LiteHostScanner)
 
